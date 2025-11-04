@@ -102,6 +102,7 @@ def write_to_dlq(failed_records, error_message, error_type, job_name, source_fil
 
 # ============================================================================
 # Feature Engineering Functions
+# TODO: Decide on final features to engineer and implement them here
 # ============================================================================
 
 def calculate_delay_rate_metrics(df):

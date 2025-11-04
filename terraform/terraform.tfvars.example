@@ -42,8 +42,8 @@ wikipedia_urls = [
 glue_version          = "4.0"
 cleaning_worker_count = 2
 feature_worker_count  = 2
-cleaning_timeout      = 30
-feature_timeout       = 45
+cleaning_timeout      = 60
+feature_timeout       = 120
 
 # ----------------------------------------------------------------------------
 # Notification Configuration

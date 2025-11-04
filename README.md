@@ -260,6 +260,8 @@ aws glue start-crawler --name flight-delays-dev-gold-crawler
 
 # Check crawler status
 aws glue get-crawler --name flight-delays-dev-raw-crawler
+aws glue get-crawler --name flight-delays-dev-silver-crawler
+aws glue get-crawler --name flight-delays-dev-gold-crawler
 ```
 
 ## Monitoring and Operations
@@ -546,7 +548,145 @@ terraform init -migrate-state
 
 ## Cleanup
 
-To destroy all resources:
+To completely destroy all resources and avoid ongoing charges, follow these comprehensive cleanup steps:
+
+### Step 1: Stop All Scheduled Jobs
+
+First, disable all EventBridge schedules to prevent new executions during cleanup:
+
+```bash
+# Disable Lambda scraper schedule
+aws events disable-rule --name flight-delays-dev-lambda-schedule
+
+# Disable Glue workflow schedule
+aws events disable-rule --name flight-delays-dev-cleaning-schedule
+
+# Disable crawler schedules (EventBridge Scheduler)
+aws scheduler update-schedule \
+  --name flight-delays-dev-raw-crawler-schedule \
+  --state DISABLED \
+  --flexible-time-window Mode=OFF \
+  --schedule-expression "cron(0 2 ? * SUN *)"
+
+aws scheduler update-schedule \
+  --name flight-delays-dev-silver-crawler-schedule \
+  --state DISABLED \
+  --flexible-time-window Mode=OFF \
+  --schedule-expression "cron(0 2 ? * SUN *)"
+
+aws scheduler update-schedule \
+  --name flight-delays-dev-gold-crawler-schedule \
+  --state DISABLED \
+  --flexible-time-window Mode=OFF \
+  --schedule-expression "cron(0 2 ? * SUN *)"
+```
+
+### Step 2: Stop Running Jobs
+
+Check for and stop any currently running jobs:
+
+```bash
+# Check running Glue jobs
+aws glue get-job-runs \
+  --job-name flight-delays-dev-data-cleaning \
+  --max-results 5
+
+aws glue get-job-runs \
+  --job-name flight-delays-dev-feature-engineering \
+  --max-results 5
+
+# Stop running jobs if any (replace <run-id> with actual run ID)
+# aws glue batch-stop-job-run \
+#   --job-name flight-delays-dev-data-cleaning \
+#   --job-run-ids <run-id>
+
+# Check running crawlers
+aws glue get-crawler --name flight-delays-dev-raw-crawler
+aws glue get-crawler --name flight-delays-dev-silver-crawler
+aws glue get-crawler --name flight-delays-dev-gold-crawler
+
+# Stop running crawlers if any
+# aws glue stop-crawler --name flight-delays-dev-raw-crawler
+# aws glue stop-crawler --name flight-delays-dev-silver-crawler
+# aws glue stop-crawler --name flight-delays-dev-gold-crawler
+```
+
+### Step 3: Clean Up Glue Catalog Tables
+
+Glue crawlers create catalog tables that are not managed by Terraform and must be manually deleted:
+
+```bash
+# List all tables in the database
+aws glue get-tables --database-name flight-delays-dev-db
+
+# Delete all tables (crawlers create these during execution)
+# Note: Table names will vary based on your data structure
+# Common patterns: historical, supplemental, scraped, silver_data, gold_data
+
+# Get all table names and delete them
+for table in $(aws glue get-tables --database-name flight-delays-dev-db --query 'TableList[].Name' --output text); do
+  echo "Deleting table: $table"
+  aws glue delete-table --database-name flight-delays-dev-db --name $table
+done
+```
+
+### Step 4: Clean Up Glue Job Metadata
+
+Remove job run history and bookmarks:
+
+```bash
+# Delete job bookmarks (if you want to start fresh)
+aws glue reset-job-bookmark --job-name flight-delays-dev-data-cleaning
+aws glue reset-job-bookmark --job-name flight-delays-dev-feature-engineering
+
+# Note: Job run history is automatically cleaned up when jobs are deleted by Terraform
+```
+
+### Step 5: Empty S3 Buckets
+
+S3 buckets with data cannot be destroyed by Terraform. Empty them first:
+
+```bash
+# Empty buckets
+aws s3 rm s3://flight-delays-dev-raw/ --recursive
+aws s3 rm s3://flight-delays-dev-silver/ --recursive
+aws s3 rm s3://flight-delays-dev-gold/ --recursive
+aws s3 rm s3://flight-delays-dev-dlq/ --recursive
+
+# Verify all buckets are empty
+aws s3 ls s3://flight-delays-dev-raw/ --recursive
+aws s3 ls s3://flight-delays-dev-silver/ --recursive
+aws s3 ls s3://flight-delays-dev-gold/ --recursive
+aws s3 ls s3://flight-delays-dev-dlq/ --recursive
+```
+
+**Note**: If the raw bucket has more than 1000 versions, repeat the delete commands until `list-object-versions` returns no Versions or DeleteMarkers.
+
+### Step 6: Delete CloudWatch Log Streams
+
+CloudWatch log streams accumulate over time and may not be fully cleaned by Terraform:
+
+```bash
+# Delete Lambda log streams
+aws logs delete-log-group --log-group-name /aws/lambda/flight-delays-dev-wikipedia-scraper
+
+# Delete Glue job log streams
+# Note: Glue creates dynamic log groups like /aws-glue/jobs/output, /aws-glue/jobs/error
+# List and delete them manually
+aws logs describe-log-groups --log-group-name-prefix /aws-glue/jobs
+
+# Delete specific Glue log groups if they exist
+aws logs delete-log-group --log-group-name /aws-glue/jobs/output || true
+aws logs delete-log-group --log-group-name /aws-glue/jobs/error || true
+aws logs delete-log-group --log-group-name /aws-glue/jobs/logs-v2 || true
+
+# Delete Spark UI event logs stored in S3 (already handled in Step 5)
+# These are in s3://flight-delays-dev-raw/glue-logs/
+```
+
+### Step 7: Run Terraform Destroy
+
+Now destroy all Terraform-managed infrastructure:
 
 ```bash
 # Review resources to be destroyed
@@ -555,14 +695,110 @@ terraform plan -destroy
 # Destroy infrastructure
 terraform destroy
 
-# Manually delete S3 buckets if they contain data
-aws s3 rb s3://flight-delays-dev-raw --force
-aws s3 rb s3://flight-delays-dev-silver --force
-aws s3 rb s3://flight-delays-dev-gold --force
-aws s3 rb s3://flight-delays-dev-dlq --force
+# Type 'yes' when prompted
 ```
 
-**Warning**: This will permanently delete all data and resources. Ensure you have backups if needed.
+### Step 8: Verify Complete Cleanup
+
+Verify all resources have been removed:
+
+```bash
+# Check S3 buckets
+aws s3 ls | grep flight-delays
+
+# Check Lambda functions
+aws lambda list-functions | grep flight-delays
+
+# Check Glue resources
+aws glue get-databases | grep flight-delays
+aws glue list-jobs | grep flight-delays
+aws glue list-crawlers | grep flight-delays
+aws glue list-workflows | grep flight-delays
+
+# Check EventBridge rules
+aws events list-rules --name-prefix flight-delays
+aws scheduler list-schedules | grep flight-delays
+
+# Check SNS topics
+aws sns list-topics | grep flight-delays
+
+# Check IAM roles
+aws iam list-roles | grep flight-delays
+
+# Check CloudWatch log groups
+aws logs describe-log-groups --log-group-name-prefix /aws/lambda/flight-delays
+aws logs describe-log-groups --log-group-name-prefix /aws-glue
+```
+
+### Step 9: Manual Cleanup of Persistent Resources (if needed)
+
+If any resources remain after Terraform destroy:
+
+```bash
+# Force delete S3 buckets if they still exist
+aws s3 rb s3://flight-delays-dev-raw --force || true
+aws s3 rb s3://flight-delays-dev-silver --force || true
+aws s3 rb s3://flight-delays-dev-gold --force || true
+aws s3 rb s3://flight-delays-dev-dlq --force || true
+
+# Delete EventBridge Scheduler schedules if they persist
+aws scheduler delete-schedule --name flight-delays-dev-raw-crawler-schedule || true
+aws scheduler delete-schedule --name flight-delays-dev-silver-crawler-schedule || true
+aws scheduler delete-schedule --name flight-delays-dev-gold-crawler-schedule || true
+
+# Delete Glue database if it persists
+aws glue delete-database --name flight-delays-dev-db || true
+
+# Delete SNS subscriptions manually (check email for unsubscribe link)
+# Or use AWS Console: SNS → Subscriptions → Delete
+```
+
+### Cleanup Checklist
+
+Use this checklist to ensure complete cleanup:
+
+- [ ] All EventBridge schedules disabled
+- [ ] No Glue jobs currently running
+- [ ] No crawlers currently running
+- [ ] All Glue catalog tables deleted
+- [ ] All S3 buckets emptied
+- [ ] CloudWatch log groups deleted
+- [ ] `terraform destroy` completed successfully
+- [ ] No S3 buckets remain
+- [ ] No Lambda functions remain
+- [ ] No Glue databases remain
+- [ ] No Glue jobs remain
+- [ ] No Glue crawlers remain
+- [ ] No Glue workflows remain
+- [ ] No EventBridge rules remain
+- [ ] No EventBridge Scheduler schedules remain
+- [ ] No SNS topics remain
+- [ ] No IAM roles remain (flight-delays-*)
+- [ ] No CloudWatch log groups remain
+
+### Cost-Saving Partial Cleanup
+
+If you want to pause the pipeline without full deletion:
+
+```bash
+# Disable schedules only (keeps infrastructure but stops execution)
+aws events disable-rule --name flight-delays-dev-lambda-schedule
+aws events disable-rule --name flight-delays-dev-cleaning-schedule
+
+# Empty large data buckets to save storage costs
+aws s3 rm s3://flight-delays-dev-raw/historical/ --recursive
+aws s3 rm s3://flight-delays-dev-silver/ --recursive
+aws s3 rm s3://flight-delays-dev-gold/ --recursive
+
+# Keep DLQ for analysis, but archive old errors
+aws s3 mv s3://flight-delays-dev-dlq/ s3://archive-bucket/dlq-backup/ --recursive
+```
+
+**Warning**: This cleanup process will **permanently delete all data and resources**. Ensure you have:
+- Exported any important analysis results
+- Backed up any data you need to retain
+- Confirmed no downstream systems depend on this pipeline
+- Documented any insights or configurations you want to preserve
 
 ## Security Best Practices
 

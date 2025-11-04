@@ -20,13 +20,15 @@ resource "aws_s3_bucket" "raw" {
   )
 }
 
-resource "aws_s3_bucket_versioning" "raw" {
-  bucket = aws_s3_bucket.raw.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
+# Versioning disabled to simplify cleanup
+# Note: If versioning was previously enabled, suspending it doesn't delete existing versions
+# resource "aws_s3_bucket_versioning" "raw" {
+#   bucket = aws_s3_bucket.raw.id
+#
+#   versioning_configuration {
+#     status = "Suspended"  # Changed from "Enabled" to "Suspended"
+#   }
+# }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "raw" {
   bucket = aws_s3_bucket.raw.id
@@ -53,6 +55,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
   rule {
     id     = "transition-to-ia"
     status = "Enabled"
+
+    filter {}
 
     transition {
       days          = var.raw_lifecycle_days
@@ -116,6 +120,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "silver" {
     id     = "transition-to-ia"
     status = "Enabled"
 
+    filter {}
+
     transition {
       days          = var.silver_lifecycle_days
       storage_class = "STANDARD_IA"
@@ -165,6 +171,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "gold" {
     id     = "transition-to-ia"
     status = "Enabled"
 
+    filter {}
+
     transition {
       days          = var.gold_lifecycle_days
       storage_class = "STANDARD_IA"
@@ -213,6 +221,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "dlq" {
   rule {
     id     = "expire-errors"
     status = "Enabled"
+
+    filter {}
 
     expiration {
       days = var.dlq_expiration_days

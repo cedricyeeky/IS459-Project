@@ -17,8 +17,18 @@ output "cleaning_schedule_arn" {
   value       = aws_cloudwatch_event_rule.cleaning_schedule.arn
 }
 
-output "crawler_schedule_arn" {
-  description = "ARN of the Glue crawler EventBridge schedule"
-  value       = aws_cloudwatch_event_rule.crawler_schedule.arn
+output "raw_crawler_schedule_arn" {
+  description = "ARN of the raw crawler EventBridge Scheduler schedule"
+  value       = aws_scheduler_schedule.raw_crawler.arn
+}
+
+output "silver_crawler_schedule_arn" {
+  description = "ARN of the silver crawler EventBridge Scheduler schedule"
+  value       = aws_scheduler_schedule.silver_crawler.arn
+}
+
+output "gold_crawler_schedule_arn" {
+  description = "ARN of the gold crawler EventBridge Scheduler schedule"
+  value       = aws_scheduler_schedule.gold_crawler.arn
 }
 

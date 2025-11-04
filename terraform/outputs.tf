@@ -118,9 +118,19 @@ output "cleaning_schedule_arn" {
   value       = module.notifications.cleaning_schedule_arn
 }
 
-output "crawler_schedule_arn" {
-  description = "ARN of the Glue crawler EventBridge schedule"
-  value       = module.notifications.crawler_schedule_arn
+output "raw_crawler_schedule_arn" {
+  description = "ARN of the raw crawler EventBridge Scheduler schedule"
+  value       = module.notifications.raw_crawler_schedule_arn
+}
+
+output "silver_crawler_schedule_arn" {
+  description = "ARN of the silver crawler EventBridge Scheduler schedule"
+  value       = module.notifications.silver_crawler_schedule_arn
+}
+
+output "gold_crawler_schedule_arn" {
+  description = "ARN of the gold crawler EventBridge Scheduler schedule"
+  value       = module.notifications.gold_crawler_schedule_arn
 }
 
 # ----------------------------------------------------------------------------

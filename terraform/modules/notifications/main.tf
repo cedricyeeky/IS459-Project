@@ -95,46 +95,91 @@ resource "aws_cloudwatch_event_target" "cleaning_job" {
 # ----------------------------------------------------------------------------
 # EventBridge Scheduler for Glue Crawlers
 # ----------------------------------------------------------------------------
+# Using EventBridge Scheduler (not CloudWatch Events) which supports Glue Crawlers
 
-resource "aws_cloudwatch_event_rule" "crawler_schedule" {
-  name                = "${var.resource_prefix}-crawler-schedule"
-  description         = "Trigger Glue crawlers weekly on Sundays at 2 AM UTC"
+resource "aws_scheduler_schedule" "raw_crawler" {
+  name       = "${var.resource_prefix}-raw-crawler-schedule"
+  group_name = "default"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
   schedule_expression = var.crawler_schedule
 
-  tags = var.tags
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:glue:startCrawler"
+    role_arn = aws_iam_role.scheduler_glue.arn
+
+    input = jsonencode({
+      Name = var.raw_crawler_name
+    })
+
+    retry_policy {
+      maximum_event_age_in_seconds = 3600
+      maximum_retry_attempts       = 2
+    }
+  }
 }
 
-# Target for Raw crawler
-resource "aws_cloudwatch_event_target" "raw_crawler" {
-  rule      = aws_cloudwatch_event_rule.crawler_schedule.name
-  target_id = "RawCrawlerTarget"
-  arn       = "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:crawler/${var.raw_crawler_name}"
-  role_arn  = aws_iam_role.eventbridge_glue.arn
+resource "aws_scheduler_schedule" "silver_crawler" {
+  name       = "${var.resource_prefix}-silver-crawler-schedule"
+  group_name = "default"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression = var.crawler_schedule
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:glue:startCrawler"
+    role_arn = aws_iam_role.scheduler_glue.arn
+
+    input = jsonencode({
+      Name = var.silver_crawler_name
+    })
+
+    retry_policy {
+      maximum_event_age_in_seconds = 3600
+      maximum_retry_attempts       = 2
+    }
+  }
 }
 
-# Target for Silver crawler
-resource "aws_cloudwatch_event_target" "silver_crawler" {
-  rule      = aws_cloudwatch_event_rule.crawler_schedule.name
-  target_id = "SilverCrawlerTarget"
-  arn       = "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:crawler/${var.silver_crawler_name}"
-  role_arn  = aws_iam_role.eventbridge_glue.arn
-}
+resource "aws_scheduler_schedule" "gold_crawler" {
+  name       = "${var.resource_prefix}-gold-crawler-schedule"
+  group_name = "default"
 
-# Target for Gold crawler
-resource "aws_cloudwatch_event_target" "gold_crawler" {
-  rule      = aws_cloudwatch_event_rule.crawler_schedule.name
-  target_id = "GoldCrawlerTarget"
-  arn       = "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:crawler/${var.gold_crawler_name}"
-  role_arn  = aws_iam_role.eventbridge_glue.arn
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression = var.crawler_schedule
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:glue:startCrawler"
+    role_arn = aws_iam_role.scheduler_glue.arn
+
+    input = jsonencode({
+      Name = var.gold_crawler_name
+    })
+
+    retry_policy {
+      maximum_event_age_in_seconds = 3600
+      maximum_retry_attempts       = 2
+    }
+  }
 }
 
 # ----------------------------------------------------------------------------
-# IAM Role for EventBridge to Trigger Glue
+# IAM Roles for EventBridge and Scheduler to Trigger Glue
 # ----------------------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+# Role for EventBridge (CloudWatch Events) to trigger Glue Workflow
 resource "aws_iam_role" "eventbridge_glue" {
   name = "${var.resource_prefix}-eventbridge-glue-role"
 
@@ -164,7 +209,44 @@ resource "aws_iam_role_policy" "eventbridge_glue" {
       {
         Effect = "Allow"
         Action = [
-          "glue:StartWorkflowRun",
+          "glue:StartWorkflowRun"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Role for EventBridge Scheduler to trigger Glue Crawlers
+resource "aws_iam_role" "scheduler_glue" {
+  name = "${var.resource_prefix}-scheduler-glue-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "scheduler_glue" {
+  name = "${var.resource_prefix}-scheduler-glue-policy"
+  role = aws_iam_role.scheduler_glue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
           "glue:StartCrawler"
         ]
         Resource = "*"
