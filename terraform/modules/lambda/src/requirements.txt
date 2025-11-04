@@ -1,0 +1,19 @@
+# Lambda Dependencies for Wikipedia Scraper
+# ==========================================
+# These packages will be included in the Lambda deployment package
+
+# HTTP requests library
+requests==2.31.0
+
+# HTML parsing library
+beautifulsoup4==4.12.2
+
+# HTML parser for BeautifulSoup
+lxml==4.9.3
+
+# AWS SDK for Python (usually pre-installed in Lambda, but included for local testing)
+boto3==1.28.85
+
+# Additional utility for parsing
+soupsieve==2.5
+

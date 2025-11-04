@@ -1,0 +1,6 @@
+# This directory will contain Lambda implementation scripts
+# To be implemented in the future:
+# - scraper.py (main Lambda handler)
+# - scraper_utils.py (helper functions)
+# - requirements.txt (Python dependencies)
+

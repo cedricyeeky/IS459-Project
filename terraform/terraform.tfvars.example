@@ -1,0 +1,63 @@
+# ============================================================================
+# Flight Delays Data Pipeline - Example Configuration
+# ============================================================================
+# Copy this file to terraform.tfvars and customize the values for your deployment
+# DO NOT commit terraform.tfvars to version control (it's in .gitignore)
+
+# ----------------------------------------------------------------------------
+# General Configuration
+# ----------------------------------------------------------------------------
+
+aws_region      = "us-east-1"
+environment     = "dev"
+resource_prefix = "flight-delays"
+cost_center     = "data-engineering"
+
+# ----------------------------------------------------------------------------
+# S3 Lifecycle Configuration
+# ----------------------------------------------------------------------------
+
+raw_lifecycle_days    = 90
+silver_lifecycle_days = 60
+gold_lifecycle_days   = 30
+dlq_expiration_days   = 30
+
+# ----------------------------------------------------------------------------
+# Lambda Configuration
+# ----------------------------------------------------------------------------
+
+lambda_memory_size = 512
+lambda_timeout     = 300
+
+# Wikipedia URLs to scrape (JSON array format)
+wikipedia_urls = [
+  "https://en.wikipedia.org/wiki/Federal_holidays_in_the_United_States",
+  "https://en.wikipedia.org/wiki/List_of_accidents_and_incidents_involving_commercial_aircraft"
+]
+
+# ----------------------------------------------------------------------------
+# Glue Configuration
+# ----------------------------------------------------------------------------
+
+glue_version          = "4.0"
+cleaning_worker_count = 2
+feature_worker_count  = 2
+cleaning_timeout      = 30
+feature_timeout       = 45
+
+# ----------------------------------------------------------------------------
+# Notification Configuration
+# ----------------------------------------------------------------------------
+
+# IMPORTANT: Replace with your actual email address
+alert_email = "your-email@example.com"
+
+# ----------------------------------------------------------------------------
+# Schedule Configuration
+# ----------------------------------------------------------------------------
+
+# Cron expressions for EventBridge schedules
+scraping_schedule = "cron(0 23 ? * SAT *)"  # Weekly Saturdays at 11 PM UTC
+cleaning_schedule = "cron(0 1 ? * SUN *)"   # Weekly Sundays at 1 AM UTC
+crawler_schedule  = "cron(0 2 ? * SUN *)"   # Weekly Sundays at 2 AM UTC
+
