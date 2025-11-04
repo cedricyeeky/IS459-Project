@@ -75,7 +75,7 @@ temp/
 *.tmp
 
 # Data files (don't commit large datasets)
-*.csv
+# *.csv
 *.parquet
 data/
 *.gz
