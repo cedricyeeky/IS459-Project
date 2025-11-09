@@ -226,19 +226,40 @@ def handle_null_values(df):
     
     return df
 
-def deduplicate_data(df):
+def deduplicate_data(df, key_columns=None):
     """
     Remove duplicate records based on key columns.
+    
+    Args:
+        df: DataFrame to deduplicate
+        key_columns: List of column names to use as deduplication keys.
+                    If None, deduplicate across all columns.
+    
+    Returns:
+        Deduplicated DataFrame
     """
     logger.info("Deduplicating data")
     
     initial_count = df.count()
     
-    # Define key columns for deduplication
-    key_columns = ["Year", "Month", "DayofMonth", "FlightNum", "UniqueCarrier", "Origin", "Dest"]
-    
-    # Keep first occurrence of each duplicate
-    deduped_df = df.dropDuplicates(key_columns)
+    if key_columns is None:
+        # Deduplicate across all columns
+        deduped_df = df.dropDuplicates()
+        logger.info("Deduplicating across all columns")
+    else:
+        # Filter key_columns to only include columns that exist in DataFrame
+        existing_keys = [col for col in key_columns if col in df.columns]
+        
+        if not existing_keys:
+            logger.warning(f"None of the specified key columns {key_columns} exist in DataFrame. Skipping deduplication.")
+            return df
+        
+        if len(existing_keys) < len(key_columns):
+            missing_keys = set(key_columns) - set(existing_keys)
+            logger.warning(f"Some key columns missing: {missing_keys}. Using available columns: {existing_keys}")
+        
+        deduped_df = df.dropDuplicates(existing_keys)
+        logger.info(f"Deduplicating using columns: {existing_keys}")
     
     final_count = deduped_df.count()
     duplicates_removed = initial_count - final_count
@@ -277,8 +298,8 @@ def process_historical_data():
         # Handle null values
         df = handle_null_values(df)
         
-        # Deduplicate
-        df = deduplicate_data(df)
+        # Deduplicate using flight-specific key columns
+        df = deduplicate_data(df, ["Year", "Month", "DayofMonth", "FlightNum", "UniqueCarrier", "Origin", "Dest"])
         
         # Detect outliers in delay columns
         if "ArrDelay" in df.columns:
@@ -301,7 +322,8 @@ def process_historical_data():
 
 def process_supplemental_data():
     """
-    Process supplemental data (plane data, FAA enplanements).
+    Process supplemental data (weather data, plane data, FAA enplanements).
+    Handles different data types with appropriate deduplication strategies.
     """
     logger.info("Processing supplemental data")
     
@@ -323,8 +345,20 @@ def process_supplemental_data():
                 logger.warning("No supplemental data found or unable to read")
                 return None
         
-        # Basic cleaning
-        df = deduplicate_data(df)
+        # Detect data type and deduplicate accordingly
+        if "obs_id" in df.columns and "valid_time_gmt" in df.columns:
+            # Weather data
+            logger.info("Detected weather data format")
+            df = deduplicate_data(df, ["obs_id", "valid_time_gmt"])
+        elif "tailnum" in df.columns or "TailNum" in df.columns:
+            # Plane data
+            logger.info("Detected plane data format")
+            # Use all columns for deduplication (or specify tailnum if it exists)
+            df = deduplicate_data(df)
+        else:
+            # Generic supplemental data - deduplicate across all columns
+            logger.info("Using generic deduplication for supplemental data")
+            df = deduplicate_data(df)
         
         # Add processing metadata
         df = df.withColumn("processing_timestamp", current_timestamp()) \
@@ -355,7 +389,7 @@ def process_scraped_data():
         
         logger.info(f"Read {df.count()} records from scraped data")
         
-        # Deduplicate (important for scraped data)
+        # Deduplicate (important for scraped data) - use all columns
         df = deduplicate_data(df)
         
         # Add processing metadata
