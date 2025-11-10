@@ -18,9 +18,9 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql.functions import (
     col, when, lit, current_timestamp, avg, count, sum as spark_sum,
     lag, lead, datediff, to_date, concat_ws, coalesce, min as spark_min,
-    max as spark_max, stddev, row_number
+    max as spark_max, stddev, row_number, floor, percentile_approx
 )
-from pyspark.sql.types import DoubleType
+from pyspark.sql.types import DoubleType, IntegerType
 import logging
 
 # ============================================================================
@@ -344,6 +344,194 @@ def create_historical_event_features(df):
         logger.warning(f"Error creating historical event features: {str(e)}")
         return df
 
+def enrich_operational_indicators(df):
+    """
+    Add indicators required to support cascade and reliability analytics.
+    """
+    logger.info("Enriching dataset with operational indicators")
+
+    try:
+        # Ensure cancelled column exists
+        if "Cancelled" not in df.columns:
+            df = df.withColumn("Cancelled", lit(0).cast(IntegerType()))
+
+        # Ensure flight_date exists
+        if "flight_date" not in df.columns:
+            df = df.withColumn(
+                "flight_date",
+                to_date(concat_ws("-", col("Year"), col("Month"), col("DayofMonth")))
+            )
+
+        # Create CRS departure time as integer and derive flight hour buckets
+        df = df.withColumn(
+            "crs_dep_time_int",
+            col("CRSDepTime").cast(IntegerType())
+        ).withColumn(
+            "flight_hour",
+            when(
+                col("crs_dep_time_int").isNotNull(),
+                floor(col("crs_dep_time_int") / lit(100))
+            ).otherwise(lit(None).cast(IntegerType()))
+        )
+
+        # Reliability flags
+        df = df.withColumn(
+            "cancelled_flag",
+            when(col("Cancelled") == 1, 1).otherwise(0)
+        ).withColumn(
+            "on_time_flag",
+            when(
+                (col("ArrDelay").isNotNull()) &
+                (col("ArrDelay") <= 15) &
+                (col("cancelled_flag") == 0),
+                1
+            ).otherwise(0)
+        )
+
+        # Cascade indicators
+        df = df.withColumn(
+            "cascade_trigger_flag",
+            when((col("DepDelay").isNotNull()) & (col("DepDelay") > 30), 1).otherwise(0)
+        )
+
+        tail_window = Window.partitionBy("TailNum", "flight_date") \
+            .orderBy(col("crs_dep_time_int"))
+
+        df = df.withColumn(
+            "next_dep_delay_same_tail",
+            lead("DepDelay").over(tail_window)
+        ).withColumn(
+            "cascade_follow_flag",
+            when(
+                (col("cascade_trigger_flag") == 1) &
+                (col("next_dep_delay_same_tail").isNotNull()) &
+                (col("next_dep_delay_same_tail") > 15),
+                1
+            ).otherwise(0)
+        )
+
+        # Composite reliability score (bounded 0-1)
+        df = df.withColumn(
+            "reliability_score_raw",
+            when(col("cancelled_flag") == 1, lit(0.0)).otherwise(
+                (col("on_time_flag") * 0.6) +
+                (1 - coalesce(col("carrier_delay_rate"), lit(0.0))) * 0.2 +
+                (1 - coalesce(col("route_delay_rate"), lit(0.0))) * 0.2
+            )
+        ).withColumn(
+            "reliability_score",
+            when(col("reliability_score_raw") < 0, lit(0.0))
+            .when(col("reliability_score_raw") > 1, lit(1.0))
+            .otherwise(col("reliability_score_raw"))
+        )
+
+        logger.info("Operational indicators added successfully")
+        return df
+
+    except Exception as e:
+        logger.warning(f"Error enriching operational indicators: {str(e)}")
+        return df
+
+def build_cascade_metrics(df):
+    """
+    Aggregate cascading delay insights for airline operations teams.
+    """
+    logger.info("Building cascade metrics dataset")
+
+    try:
+        base_agg = df.groupBy("Year", "Month", "UniqueCarrier", "Origin", "Dest") \
+            .agg(
+                count("*").alias("flight_count"),
+                spark_sum("cascade_trigger_flag").alias("cascade_triggers"),
+                spark_sum("cascade_follow_flag").alias("cascade_events"),
+                spark_sum("is_delayed").alias("arrival_delay_events"),
+                spark_sum("on_time_flag").alias("on_time_events"),
+                avg("ArrDelay").alias("avg_arrival_delay"),
+                avg("DepDelay").alias("avg_departure_delay"),
+                avg("rolling_avg_delay_30d").alias("rolling_avg_arrival_delay_30d"),
+                spark_max("rolling_flight_count_30d").alias("max_flight_volume_30d")
+            )
+
+        cascade_metrics = base_agg \
+            .withColumn(
+                "cascade_rate",
+                when(col("flight_count") > 0,
+                     col("cascade_events") / col("flight_count")).otherwise(lit(0.0))
+            ).withColumn(
+                "cascade_propagation_ratio",
+                when(col("cascade_triggers") > 0,
+                     col("cascade_events") / col("cascade_triggers")).otherwise(lit(0.0))
+            ).withColumn(
+                "arrival_delay_rate",
+                when(col("flight_count") > 0,
+                     col("arrival_delay_events") / col("flight_count")).otherwise(lit(0.0))
+            ).withColumn(
+                "on_time_rate",
+                when(col("flight_count") > 0,
+                     col("on_time_events") / col("flight_count")).otherwise(lit(0.0))
+            ).withColumn(
+                "snapshot_ts",
+                current_timestamp()
+            )
+
+        return cascade_metrics
+
+    except Exception as e:
+        logger.error(f"Error building cascade metrics: {str(e)}")
+        write_to_dlq(df, f"Failed to build cascade metrics: {str(e)}",
+                     "aggregation_error", JOB_NAME)
+        return None
+
+def build_reliability_metrics(df):
+    """
+    Aggregate traveler-facing reliability metrics.
+    """
+    logger.info("Building reliability metrics dataset")
+
+    try:
+        reliability_agg = df.groupBy(
+            "Year", "Month", "UniqueCarrier", "Origin", "Dest", "flight_hour"
+        ).agg(
+            count("*").alias("flight_count"),
+            spark_sum("on_time_flag").alias("on_time_flights"),
+            spark_sum("cancelled_flag").alias("cancelled_flights"),
+            avg("reliability_score").alias("avg_reliability_score"),
+            percentile_approx("ArrDelay", 0.5, 100).alias("median_arrival_delay"),
+            percentile_approx("ArrDelay", 0.8, 100).alias("p80_arrival_delay"),
+            avg("ArrDelay").alias("avg_arrival_delay"),
+            avg("DepDelay").alias("avg_departure_delay"),
+            avg("carrier_delay_rate").alias("carrier_delay_rate"),
+            avg("route_delay_rate").alias("route_delay_rate"),
+            avg("time_delay_rate").alias("time_delay_rate")
+        )
+
+        reliability_metrics = reliability_agg \
+            .withColumn(
+                "on_time_rate",
+                when(col("flight_count") > 0,
+                     col("on_time_flights") / col("flight_count")).otherwise(lit(0.0))
+            ).withColumn(
+                "cancellation_rate",
+                when(col("flight_count") > 0,
+                     col("cancelled_flights") / col("flight_count")).otherwise(lit(0.0))
+            ).withColumn(
+                "reliability_band",
+                when(col("on_time_rate") >= 0.85, lit("high"))
+                .when(col("on_time_rate") >= 0.7, lit("medium"))
+                .otherwise(lit("low"))
+            ).withColumn(
+                "snapshot_ts",
+                current_timestamp()
+            )
+
+        return reliability_metrics
+
+    except Exception as e:
+        logger.error(f"Error building reliability metrics: {str(e)}")
+        write_to_dlq(df, f"Failed to build reliability metrics: {str(e)}",
+                     "aggregation_error", JOB_NAME)
+        return None
+
 def calculate_feature_statistics(df):
     """
     Calculate and log statistics for engineered features.
@@ -402,22 +590,23 @@ def read_silver_data():
         logger.error(f"Error reading from Silver bucket: {str(e)}")
         raise
 
-def write_to_gold(df):
+def write_to_gold(df, subdirectory, partition_cols=None):
     """
     Write feature-engineered data to Gold bucket in Parquet format.
     """
-    logger.info("Writing data to Gold bucket")
+    logger.info(f"Writing data to Gold bucket path: {subdirectory}")
     
     try:
-        gold_path = f"s3://{GOLD_BUCKET}/"
+        gold_path = f"s3://{GOLD_BUCKET}/{subdirectory}/"
         
-        # Write with partitioning by Year and Month
-        df.write \
-            .mode("append") \
-            .partitionBy("Year", "Month") \
-            .parquet(gold_path)
-        
-        logger.info(f"Successfully wrote {df.count()} records to Gold bucket")
+        writer = df.write.mode("append")
+
+        if partition_cols:
+            writer = writer.partitionBy(*partition_cols)
+
+        writer.parquet(gold_path)
+
+        logger.info(f"Successfully wrote {df.count()} records to Gold bucket at {gold_path}")
         
     except Exception as e:
         logger.error(f"Error writing to Gold bucket: {str(e)}")
@@ -462,12 +651,29 @@ try:
     # Add feature engineering metadata
     df = df.withColumn("feature_eng_timestamp", current_timestamp()) \
            .withColumn("target_layer", lit("gold"))
+
+    # Enrich with operational indicators used for downstream aggregates
+    df = enrich_operational_indicators(df)
     
     # Calculate and log feature statistics
     calculate_feature_statistics(df)
     
-    # Write to Gold bucket
-    write_to_gold(df)
+    # Write enriched flight-level features to Gold
+    write_to_gold(df, "flight_features", partition_cols=["Year", "Month"])
+
+    # Build and write cascade metrics
+    cascade_metrics_df = build_cascade_metrics(df)
+    if cascade_metrics_df is not None:
+        write_to_gold(cascade_metrics_df, "cascade_metrics", partition_cols=["Year", "Month"])
+
+    # Build and write reliability metrics
+    reliability_metrics_df = build_reliability_metrics(df)
+    if reliability_metrics_df is not None:
+        write_to_gold(
+            reliability_metrics_df,
+            "reliability_metrics",
+            partition_cols=["Year", "Month", "flight_hour"]
+        )
     
     logger.info("=" * 80)
     logger.info("Feature Engineering Job Completed Successfully")

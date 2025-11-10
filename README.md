@@ -72,6 +72,7 @@ A production-ready AWS data pipeline built with Terraform that processes flight 
 - **Automated Scheduling**: EventBridge schedules for weekly pipeline execution
 - **Data Catalog**: AWS Glue crawlers for automatic schema discovery
 - **Monitoring**: SNS email alerts for pipeline failures
+- **Actionable Gold Outputs**: Gold layer publishes flight-level features plus cascade-risk and traveler reliability scorecards
 - **Infrastructure as Code**: 100% Terraform with modular design
 
 ## Prerequisites
@@ -207,6 +208,19 @@ aws s3 cp faa_enplanements.csv s3://flight-delays-dev-raw/supplemental/
 aws s3 ls s3://flight-delays-dev-raw/ --recursive
 ```
 
+#### Local Data Source Map
+
+If you are working from this repository clone, the following helper datasets live under the project root and can be uploaded directly to S3 using the listed prefixes:
+
+- `datafiles/plane-data.xls` → `s3://<raw-bucket>/supplemental/plane-data/`
+- `datafiles/carriers.xls` → `s3://<raw-bucket>/supplemental/carriers/`
+- `datafiles/airports.xls` → `s3://<raw-bucket>/supplemental/airports/`
+- `datafiles/federal_holidays.csv` → `s3://<raw-bucket>/scraped/holidays/`
+- `datafiles/globalterrorism_raw.csv`, `datafiles/us_terrorism_1987_2008.csv` → optional enrichment in `s3://<raw-bucket>/supplemental/security/`
+- `preprocessing/weather_data_list*.csv` → `s3://<raw-bucket>/supplemental/weather/` (ingested by Glue Job 1; each file deduplicates on `obs_id`, `valid_time_gmt`)
+
+> Tip: keep file names consistent when uploading so Glue Job 1 can infer schemas and preserve data lineage metadata.
+
 ### Manual Trigger Options
 
 #### Trigger Lambda Scraper Manually
@@ -263,6 +277,27 @@ aws glue get-crawler --name flight-delays-dev-raw-crawler
 aws glue get-crawler --name flight-delays-dev-silver-crawler
 aws glue get-crawler --name flight-delays-dev-gold-crawler
 ```
+
+### Inspect Gold Outputs
+
+Glue Job 2 publishes three datasets that directly address the business questions:
+
+- `s3://<gold-bucket>/flight_features/` — flight-level records with rolling delays, holiday flags, weather placeholders, cascade indicators, and reliability scores.
+- `s3://<gold-bucket>/cascade_metrics/` — carrier/route aggregates exposing cascade triggers, propagation ratios, and arrival delay rates for airline operations.
+- `s3://<gold-bucket>/reliability_metrics/` — traveler-facing scorecards combining on-time rates, cancellation risk, and percentile delays by flight hour.
+
+Validate a run by sampling the partitions:
+
+```bash
+aws s3 ls s3://flight-delays-dev-gold/flight_features/ --recursive | head
+aws s3 ls s3://flight-delays-dev-gold/cascade_metrics/ --recursive | head
+aws s3 ls s3://flight-delays-dev-gold/reliability_metrics/ --recursive | head
+```
+
+Each aggregate includes a `snapshot_ts` column for freshness filtering and aligns to:
+
+- **Business Question 1** — monitor `cascade_rate`, `cascade_propagation_ratio`, and `arrival_delay_rate` to minimize cascading delays.
+- **Business Question 2** — surface `on_time_rate`, `cancellation_rate`, and `reliability_band` for traveler-facing reliability guidance.
 
 ## Monitoring and Operations
 
