@@ -1,0 +1,53 @@
+meta {
+  name: Get Flights (By Route)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  origin: ORD
+  destination: LAX
+  limit: 50
+}
+
+docs {
+  # Get Flights by Route
+  
+  Filter flights for a specific origin-destination pair.
+  
+  ## Example: Chicago (ORD) to Los Angeles (LAX)
+  
+  ## Major Airports Available
+  High Traffic:
+  - ORD: Chicago O'Hare
+  - ATL: Atlanta
+  - DFW: Dallas/Fort Worth
+  - LAX: Los Angeles
+  - PHX: Phoenix
+  - DEN: Denver
+  - DTW: Detroit
+  - IAH: Houston
+  - MSP: Minneapolis
+  - SFO: San Francisco
+  - EWR: Newark
+  - LAS: Las Vegas
+  - CLT: Charlotte
+  - LGA: New York LaGuardia
+  - BOS: Boston
+  - PHL: Philadelphia
+  - SEA: Seattle
+  
+  Medium Traffic:
+  - STL: St. Louis
+  - PIT: Pittsburgh
+  - SLC: Salt Lake City
+  
+  ## Use Case
+  Analyze route-specific performance and reliability patterns.
+}

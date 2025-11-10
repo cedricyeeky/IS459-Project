@@ -1,0 +1,62 @@
+# Copy this file to terraform.tfvars and customize for your environment
+
+# ============================================
+# Required: AWS Configuration
+# ============================================
+aws_region   = "us-east-1"
+project_name = "flight-mock-api"
+environment  = "dev"
+
+# ============================================
+# Network Configuration
+# ============================================
+# Leave vpc_id empty to create a new VPC
+# Or provide existing VPC ID: vpc_id = "vpc-xxxxx"
+vpc_id = ""
+
+# Only used if creating new VPC
+# vpc_cidr              = "10.0.0.0/16"
+# availability_zones    = ["us-east-1a", "us-east-1b"]
+# private_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+# public_subnet_cidrs   = ["10.0.101.0/24", "10.0.102.0/24"]
+# single_nat_gateway    = true  # Set to false for HA (costs more)
+
+# ============================================
+# S3 Configuration
+# ============================================
+# Leave raw_bucket_name empty to create a new bucket
+# Or provide existing bucket: raw_bucket_name = "my-existing-bucket"
+raw_bucket_name         = ""
+raw_data_retention_days = 90
+
+# ============================================
+# Mock API Configuration
+# ============================================
+mock_api_image_tag     = "latest"
+mock_api_port          = 5200
+mock_api_cpu           = 512    # 0.5 vCPU
+mock_api_memory        = 1024   # 1 GB
+mock_api_desired_count = 2      # Run 2 instances for HA
+
+# ============================================
+# Scraper Configuration
+# ============================================
+scraper_image_tag           = "latest"
+scraper_cpu                 = 256   # 0.25 vCPU
+scraper_memory              = 512   # 512 MB
+scraper_schedule_expression = "rate(15 minutes)"
+
+# Alternative schedule examples:
+# Every 5 minutes:  "rate(5 minutes)"
+# Every hour:       "rate(1 hour)"
+# Every day at 2am: "cron(0 2 * * ? *)"
+# Every Monday:     "cron(0 9 ? * MON *)"
+
+# ============================================
+# Additional Tags
+# ============================================
+tags = {
+  Team        = "Data Engineering"
+  CostCenter  = "Analytics"
+  Application = "Flight Reliability"
+}

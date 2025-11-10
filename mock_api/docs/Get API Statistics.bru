@@ -1,0 +1,43 @@
+meta {
+  name: Get API Statistics
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/stats
+  body: none
+  auth: none
+}
+
+docs {
+  # API Statistics and Health Metrics
+  
+  Provides comprehensive information about the API's capabilities and performance.
+  
+  ## Response Includes
+  
+  ### API Information
+  - Version
+  - Uptime status
+  - Current timestamp
+  
+  ### Data Metrics
+  - Number of carriers available (24)
+  - Number of airports available (20)
+  - Number of delay reason codes (5)
+  - Default rows per request (250)
+  - Maximum rows per request (1000)
+  
+  ### Carrier Reliability Rankings
+  Complete list of all carriers sorted by reliability score (0.0 - 1.0)
+  
+  ## Use Cases
+  - Monitoring scraper performance
+  - API health checks
+  - Data availability verification
+  - Carrier reliability reference
+  
+  ## Business Value
+  Helps identify which carriers to prioritize in reliability analysis.
+}

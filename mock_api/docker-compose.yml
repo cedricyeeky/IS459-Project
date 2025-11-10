@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  mock-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flight-mock-api
+    ports:
+      - "5200:5200"
+    environment:
+      - PORT=5200
+      - ROWS_PER_REQUEST=100
+      - DEBUG=False
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5200/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - flight-api-network
+
+networks:
+  flight-api-network:
+    driver: bridge

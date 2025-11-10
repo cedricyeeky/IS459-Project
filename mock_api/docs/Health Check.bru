@@ -1,0 +1,28 @@
+meta {
+  name: Health Check
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  # Health Check Endpoint
+  
+  Used by ECS and load balancers to verify the API is running and responsive.
+  
+  ## Response
+  Returns:
+  - `status`: "healthy"
+  - `timestamp`: Current UTC timestamp
+  - `version`: API version
+  
+  ## Use Cases
+  - Load balancer health checks
+  - Monitoring and alerting
+  - Service discovery
+}

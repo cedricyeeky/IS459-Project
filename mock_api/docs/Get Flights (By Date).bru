@@ -1,0 +1,32 @@
+meta {
+  name: Get Flights (By Date)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  date: 2025-11-10
+  limit: 100
+}
+
+docs {
+  # Get Flights by Specific Date
+  
+  Retrieve historical or future flight data for a specific date.
+  
+  ## Example Use Case
+  Analyze flight patterns and reliability metrics for November 10, 2025
+  
+  ## Parameters
+  - `date`: 2025-11-10 (YYYY-MM-DD format)
+  - `limit`: 100 records
+  
+  ## Response
+  Returns flights scheduled for the specified date with full reliability metrics.
+}

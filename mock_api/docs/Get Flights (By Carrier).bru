@@ -1,0 +1,46 @@
+meta {
+  name: Get Flights (By Carrier)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  carrier: AA
+  limit: 150
+}
+
+docs {
+  # Get Flights by Carrier
+  
+  Filter flights for a specific airline carrier.
+  
+  ## Example: American Airlines (AA)
+  
+  ## Available Carriers
+  Major US Airlines:
+  - AA: American Airlines
+  - DL: Delta Air Lines
+  - UA: United Air Lines
+  - WN: Southwest Airlines
+  - B6: JetBlue Airways
+  - AS: Alaska Airlines
+  - NK: Spirit Air Lines
+  - F9: Frontier Airlines
+  - G4: Allegiant Air
+  
+  Regional Airlines:
+  - OO: Skywest Airlines
+  - MQ: American Eagle
+  - 9E: Pinnacle Airlines
+  - YV: Mesa Airlines
+  - EV: Atlantic Southeast
+  
+  ## Response
+  Returns all flights operated by the specified carrier with reliability scores.
+}

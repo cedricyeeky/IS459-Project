@@ -1,0 +1,50 @@
+meta {
+  name: Get Flights (Complex Filter)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  carrier: DL
+  origin: ATL
+  status: ARRIVED
+  date: 2025-11-10
+  limit: 75
+}
+
+docs {
+  # Complex Multi-Parameter Filtering
+  
+  Combine multiple filters for specific data analysis scenarios.
+  
+  ## Example Query
+  Find Delta Air Lines (DL) flights that:
+  - Originated from Atlanta (ATL)
+  - Have arrived at their destination
+  - Were scheduled for November 10, 2025
+  - Limit to 75 records
+  
+  ## Filter Combinations
+  You can combine any of these parameters:
+  - `carrier`: Airline code
+  - `origin`: Departure airport
+  - `destination`: Arrival airport
+  - `status`: Flight status
+  - `date`: Specific date
+  - `limit`: Result count
+  
+  ## Use Cases
+  - Route-specific carrier performance analysis
+  - Historical arrival patterns
+  - Completed flight reliability metrics
+  - Hub operation efficiency studies
+  
+  ## Performance Note
+  More filters = fewer records found, may need higher limit to get desired count.
+}

@@ -1,0 +1,37 @@
+meta {
+  name: Get Realtime Flights (Custom Limit)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights/realtime
+  body: none
+  auth: none
+}
+
+params:query {
+  limit: 500
+}
+
+docs {
+  # Get Real-time Flights with Custom Limit
+  
+  Override the default random count (200-300) to request a specific number of records.
+  
+  ## Example: 500 Records
+  
+  Useful for:
+  - Testing with larger datasets
+  - Batch processing requirements
+  - Load testing scenarios
+  
+  ## Limit Guidelines
+  - Default: Random 200-300 records
+  - Minimum: 1 record
+  - Maximum: 1000 records
+  
+  ## Performance Note
+  Larger limits will increase response time proportionally, but still faster than 
+  the general `/flights` endpoint due to optimized time-window generation.
+}

@@ -1,0 +1,41 @@
+meta {
+  name: Get Flights (All)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  limit: 250
+}
+
+docs {
+  # Get Flights - Main Endpoint
+  
+  Retrieve flight data with optional filtering capabilities.
+  
+  ## Query Parameters
+  - `limit`: Number of records (default: 250, max: 1000)
+  - `date`: Filter by date (format: YYYY-MM-DD)
+  - `carrier`: Filter by carrier code (e.g., AA, DL, UA)
+  - `origin`: Filter by origin airport code
+  - `destination`: Filter by destination airport code
+  - `status`: Filter by status (SCHEDULED, DEPARTED, ARRIVED, DELAYED, CANCELLED)
+  
+  ## Response Structure
+  - `metadata`: Request information and timestamp
+  - `summary_statistics`: Aggregated performance metrics
+  - `flights`: Array of flight records
+  
+  ## Business Metrics
+  Each flight includes:
+  - On-time performance indicators
+  - Delay reasons and cascade risk
+  - Carrier reliability scores
+  - Traveler-facing reliability bands
+}

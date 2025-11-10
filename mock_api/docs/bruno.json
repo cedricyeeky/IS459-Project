@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "Mock Flight API",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

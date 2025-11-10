@@ -1,0 +1,39 @@
+meta {
+  name: Get Flights (Delayed Only)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights
+  body: none
+  auth: none
+}
+
+params:query {
+  status: DELAYED
+  limit: 100
+}
+
+docs {
+  # Get Delayed Flights Only
+  
+  Filter to show only flights currently experiencing delays.
+  
+  ## Flight Statuses
+  - SCHEDULED: Flight on schedule, not yet departed
+  - DEPARTED: Flight has left the gate
+  - ARRIVED: Flight has reached destination
+  - DELAYED: Flight experiencing delays
+  - CANCELLED: Flight cancelled
+  
+  ## Delay Analysis
+  Delayed flights include:
+  - Delay reason codes (WEATHER, CARRIER, NAS, SECURITY, LATE_AIRCRAFT)
+  - Departure delay minutes
+  - Arrival delay minutes
+  - Cascade risk indicators
+  
+  ## Use Case
+  Monitor current operational disruptions and delay patterns.
+}

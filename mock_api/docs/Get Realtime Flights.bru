@@ -1,0 +1,43 @@
+meta {
+  name: Get Realtime Flights
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/flights/realtime
+  body: none
+  auth: none
+}
+
+docs {
+  # Get Real-time Flight Updates
+  
+  **Optimized endpoint for real-time data collection (matches EventBridge trigger)**
+  
+  Returns flights within the current 15-minute window with fast generation.
+  Generates random 200-300 records by default if limit not specified.
+  
+  ## Key Features
+  - No filtering needed (pre-optimized for speed)
+  - Matches 15-minute EventBridge schedule
+  - Random record count (200-300) mimics realistic API behavior
+  - Flights generated within ±15 minutes of current time
+  
+  ## Query Parameters
+  - `limit`: Override default random count (max: 1000)
+  
+  ## Response Structure
+  - `metadata`: Includes timestamp and 15-minute window info
+  - `flights`: Array of current/upcoming flights
+  
+  ## Use Case
+  Primary endpoint for ECS scraper scheduled every 15 minutes.
+  Designed for continuous data pipeline ingestion.
+  
+  ## Performance
+  Significantly faster than `/flights` endpoint due to:
+  - No date filtering needed
+  - Tight time window (±15 minutes)
+  - Direct record generation
+}
