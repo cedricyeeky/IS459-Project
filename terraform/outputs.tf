@@ -148,6 +148,25 @@ output "glue_role_arn" {
 }
 
 # ----------------------------------------------------------------------------
+# Athena Outputs (Phase 1)
+# ----------------------------------------------------------------------------
+
+output "athena_workgroup_name" {
+  description = "Name of the Athena workgroup for Phase 1 analytics"
+  value       = module.athena.workgroup_name
+}
+
+output "athena_query_result_location" {
+  description = "S3 location for Athena query results"
+  value       = module.athena.query_result_location
+}
+
+output "athena_named_queries" {
+  description = "Map of named query names to IDs"
+  value       = module.athena.named_query_ids
+}
+
+# ----------------------------------------------------------------------------
 # Deployment Information
 # ----------------------------------------------------------------------------
 

@@ -190,3 +190,17 @@ module "notifications" {
   tags = local.common_tags
 }
 
+# ============================================================================
+# Athena Module - Analytics Query Layer (Phase 1)
+# ============================================================================
+
+module "athena" {
+  source = "./modules/athena"
+
+  resource_prefix = local.resource_prefix
+  database_name   = module.glue.database_name
+  raw_bucket_name = module.s3.raw_bucket_name
+
+  tags = local.common_tags
+}
+
