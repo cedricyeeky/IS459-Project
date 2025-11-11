@@ -15,7 +15,7 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, when, lit, current_timestamp, abs as spark_abs
+from pyspark.sql.functions import col, when, lit, current_timestamp, abs as spark_abs, input_file_name
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
 import logging
 
@@ -322,164 +322,206 @@ def process_historical_data():
 
 def process_supplemental_data():
     """
-    Process supplemental data (weather data, plane data, FAA enplanements).
-    Handles different data types with appropriate deduplication strategies.
+    Process supplemental data (weather data, terrorism data, plane data, FAA enplanements).
+    Handles different data types from subdirectories with appropriate deduplication strategies.
+    Returns a dictionary with separate dataframes for each type: {'weather': df, 'terrorism': df, 'supplemental': df}
     """
     logger.info("Processing supplemental data")
     
+    results = {}
+    
+    # ============================================================================
+    # Process Weather Data from supplemental/weather/
+    # ============================================================================
+    try:
+        weather_path = f"s3://{RAW_BUCKET}/supplemental/weather/"
+        logger.info(f"Reading weather data from {weather_path}")
+        
+        weather_df = spark.read \
+            .option("header", "true") \
+            .option("inferSchema", "true") \
+            .csv(weather_path)
+        
+        weather_count = weather_df.count()
+        logger.info(f"Read {weather_count} records from weather data")
+        
+        if weather_count > 0:
+            # Weather data deduplication using obs_id and valid_time_gmt
+            if "obs_id" in weather_df.columns and "valid_time_gmt" in weather_df.columns:
+                weather_df = deduplicate_data(weather_df, ["obs_id", "valid_time_gmt"])
+                logger.info("Deduplicated weather data using obs_id and valid_time_gmt")
+            else:
+                logger.warning("Weather data missing obs_id or valid_time_gmt columns, using generic deduplication")
+                weather_df = deduplicate_data(weather_df)
+            
+            # Add processing metadata
+            weather_df = weather_df.withColumn("processing_timestamp", current_timestamp()) \
+                                   .withColumn("source_layer", lit("raw")) \
+                                   .withColumn("data_source", lit("supplemental")) \
+                                   .withColumn("data_type", lit("weather"))
+            
+            results['weather'] = weather_df
+            logger.info(f"Weather data processing complete: {weather_count} records")
+        else:
+            logger.info("No weather data found")
+            
+    except Exception as e:
+        logger.warning(f"Error processing weather data (may not exist): {str(e)}")
+    
+    # ============================================================================
+    # Process Terrorism/Security Data from supplemental/security/
+    # ============================================================================
+    try:
+        security_path = f"s3://{RAW_BUCKET}/supplemental/security/"
+        logger.info(f"Reading terrorism data from {security_path}")
+        
+        terrorism_df = spark.read \
+            .option("header", "true") \
+            .option("inferSchema", "true") \
+            .csv(security_path)
+        
+        terrorism_count = terrorism_df.count()
+        logger.info(f"Read {terrorism_count} records from terrorism data")
+        
+        if terrorism_count > 0:
+            # Terrorism data deduplication - use date columns if available
+            dedup_cols = []
+            if "iyear" in terrorism_df.columns and "imonth" in terrorism_df.columns and "iday" in terrorism_df.columns:
+                # Global Terrorism Database format
+                dedup_cols = ["iyear", "imonth", "iday", "country", "city", "latitude", "longitude"]
+                logger.info("Detected Global Terrorism Database format")
+            elif "event_date" in terrorism_df.columns:
+                dedup_cols = ["event_date", "location"]
+                logger.info("Detected event_date format")
+            elif "date" in terrorism_df.columns:
+                dedup_cols = ["date", "location"]
+                logger.info("Detected date format")
+            
+            if dedup_cols:
+                # Filter to only existing columns
+                existing_dedup_cols = [c for c in dedup_cols if c in terrorism_df.columns]
+                if existing_dedup_cols:
+                    terrorism_df = deduplicate_data(terrorism_df, existing_dedup_cols)
+                    logger.info(f"Deduplicated terrorism data using columns: {existing_dedup_cols}")
+                else:
+                    terrorism_df = deduplicate_data(terrorism_df)
+                    logger.warning("None of the expected deduplication columns found, using generic deduplication")
+            else:
+                terrorism_df = deduplicate_data(terrorism_df)
+                logger.info("Using generic deduplication for terrorism data")
+            
+            # Add processing metadata
+            terrorism_df = terrorism_df.withColumn("processing_timestamp", current_timestamp()) \
+                                      .withColumn("source_layer", lit("raw")) \
+                                      .withColumn("data_source", lit("supplemental")) \
+                                      .withColumn("data_type", lit("terrorism"))
+            
+            results['terrorism'] = terrorism_df
+            logger.info(f"Terrorism data processing complete: {terrorism_count} records")
+        else:
+            logger.info("No terrorism data found")
+            
+    except Exception as e:
+        logger.warning(f"Error processing terrorism data (may not exist): {str(e)}")
+    
+    # ============================================================================
+    # Process Other Supplemental Data from root supplemental/ directory
+    # (plane data, FAA enplanements, etc.)
+    # ============================================================================
     try:
         supplemental_path = f"s3://{RAW_BUCKET}/supplemental/"
+        logger.info(f"Reading other supplemental data from {supplemental_path}")
         
-        # Try to read supplemental data (may be CSV or Parquet)
-        try:
-            df = spark.read \
-                .option("header", "true") \
-                .option("inferSchema", "true") \
-                .csv(supplemental_path)
-            logger.info(f"Read {df.count()} records from supplemental CSV data")
-        except:
-            try:
-                df = spark.read.parquet(supplemental_path)
-                logger.info(f"Read {df.count()} records from supplemental Parquet data")
-            except:
-                logger.warning("No supplemental data found or unable to read")
-                return None
+        # Read all files from supplemental/ directory
+        other_df = spark.read \
+            .option("header", "true") \
+            .option("inferSchema", "true") \
+            .csv(supplemental_path)
         
-        # Detect data type and deduplicate accordingly
-        if "obs_id" in df.columns and "valid_time_gmt" in df.columns:
-            # Weather data
-            logger.info("Detected weather data format")
-            df = deduplicate_data(df, ["obs_id", "valid_time_gmt"])
-        elif "tailnum" in df.columns or "TailNum" in df.columns:
-            # Plane data
-            logger.info("Detected plane data format")
-            # Use all columns for deduplication (or specify tailnum if it exists)
-            df = deduplicate_data(df)
+        # Add file path column to filter out subdirectories
+        other_df = other_df.withColumn("file_path", input_file_name())
+        
+        # Filter out files from weather/ and security/ subdirectories
+        other_df = other_df.filter(
+            ~col("file_path").contains("/weather/") & 
+            ~col("file_path").contains("/security/")
+        )
+        
+        other_count = other_df.count()
+        
+        if other_count > 0:
+            logger.info(f"Read {other_count} records from other supplemental data")
+            
+            # Remove the file_path column after filtering
+            other_df = other_df.drop("file_path")
+            
+            # Detect data type and deduplicate accordingly
+            if "tailnum" in other_df.columns or "TailNum" in other_df.columns:
+                # Plane data
+                logger.info("Detected plane data format")
+                other_df = deduplicate_data(other_df)
+            else:
+                # Generic supplemental data - deduplicate across all columns
+                logger.info("Using generic deduplication for other supplemental data")
+                other_df = deduplicate_data(other_df)
+            
+            # Add processing metadata
+            other_df = other_df.withColumn("processing_timestamp", current_timestamp()) \
+                               .withColumn("source_layer", lit("raw")) \
+                               .withColumn("data_source", lit("supplemental")) \
+                               .withColumn("data_type", lit("other"))
+            
+            results['supplemental'] = other_df
+            logger.info(f"Other supplemental data processing complete: {other_count} records")
         else:
-            # Generic supplemental data - deduplicate across all columns
-            logger.info("Using generic deduplication for supplemental data")
-            df = deduplicate_data(df)
-        
-        # Add processing metadata
-        df = df.withColumn("processing_timestamp", current_timestamp()) \
-               .withColumn("source_layer", lit("raw")) \
-               .withColumn("data_source", lit("supplemental"))
-        
-        logger.info(f"Supplemental data processing complete: {df.count()} records")
-        return df
-        
+            logger.info("No other supplemental data found in root supplemental/ directory")
+            
     except Exception as e:
-        logger.error(f"Error processing supplemental data: {str(e)}")
-        return None
-
-def process_scraped_data():
-    """
-    Process scraped data from Mock API (weather and flights in JSON format).
-    """
-    logger.info("Processing scraped data")
+        logger.warning(f"Error processing other supplemental data (may not exist): {str(e)}")
     
-    try:
-        # Process weather data
-        weather_path = f"s3://{RAW_BUCKET}/scraped/weather/"
-        flights_path = f"s3://{RAW_BUCKET}/scraped/flights/"
+    # ============================================================================
+    # Return results dictionary
+    # ============================================================================
+    if results:
+        total_records = sum([df.count() for df in results.values()])
+        logger.info(f"Supplemental data processing complete: {total_records} total records")
         
-        all_data_frames = []
+        # Log breakdown by data type
+        for data_type, df in results.items():
+            count = df.count()
+            logger.info(f"  - {data_type}: {count} records")
         
-        # Try to read weather JSON files
-        try:
-            logger.info(f"Reading weather data from {weather_path}")
-            weather_df = spark.read \
-                .option("multiLine", "true") \
-                .json(weather_path)
-            
-            if weather_df.count() > 0:
-                logger.info(f"Read {weather_df.count()} weather records")
-                
-                # Extract observations array if it exists (from the metadata structure)
-                if "observations" in weather_df.columns:
-                    from pyspark.sql.functions import explode
-                    weather_df = weather_df.select(explode(col("observations")).alias("observation"))
-                    weather_df = weather_df.select("observation.*")
-                    logger.info(f"Exploded observations: {weather_df.count()} records")
-                
-                # Deduplicate weather data using obs_id if available
-                if "obs_id" in weather_df.columns:
-                    weather_df = deduplicate_data(weather_df, ["obs_id"])
-                else:
-                    weather_df = deduplicate_data(weather_df)
-                
-                # Add processing metadata
-                weather_df = weather_df.withColumn("processing_timestamp", current_timestamp()) \
-                           .withColumn("source_layer", lit("raw")) \
-                           .withColumn("data_source", lit("scraped_weather"))
-                
-                all_data_frames.append(weather_df)
-                logger.info(f"Processed {weather_df.count()} weather records")
-        except Exception as e:
-            logger.warning(f"No weather data found or error processing: {str(e)}")
-        
-        # Try to read flights JSON files
-        try:
-            logger.info(f"Reading flights data from {flights_path}")
-            flights_df = spark.read \
-                .option("multiLine", "true") \
-                .json(flights_path)
-            
-            if flights_df.count() > 0:
-                logger.info(f"Read {flights_df.count()} flight records")
-                
-                # Extract flights array if it exists (from the metadata structure)
-                if "flights" in flights_df.columns:
-                    from pyspark.sql.functions import explode
-                    flights_df = flights_df.select(explode(col("flights")).alias("flight"))
-                    flights_df = flights_df.select("flight.*")
-                    logger.info(f"Exploded flights: {flights_df.count()} records")
-                
-                # Deduplicate flights data
-                if "flight_id" in flights_df.columns:
-                    flights_df = deduplicate_data(flights_df, ["flight_id"])
-                elif all(col_name in flights_df.columns for col_name in ["flight_number", "scheduled_departure", "origin"]):
-                    flights_df = deduplicate_data(flights_df, ["flight_number", "scheduled_departure", "origin"])
-                else:
-                    flights_df = deduplicate_data(flights_df)
-                
-                # Add processing metadata
-                flights_df = flights_df.withColumn("processing_timestamp", current_timestamp()) \
-                           .withColumn("source_layer", lit("raw")) \
-                           .withColumn("data_source", lit("scraped_flights"))
-                
-                all_data_frames.append(flights_df)
-                logger.info(f"Processed {flights_df.count()} flight records")
-        except Exception as e:
-            logger.warning(f"No flights data found or error processing: {str(e)}")
-        
-        # Combine all scraped data if any exists
-        if len(all_data_frames) == 0:
-            logger.warning("No scraped data found")
-            return None
-        elif len(all_data_frames) == 1:
-            logger.info(f"Scraped data processing complete: {all_data_frames[0].count()} records")
-            return all_data_frames[0]
-        else:
-            # Return as separate dataframes or union if schemas are compatible
-            # For now, we'll write them separately
-            logger.info(f"Processed multiple scraped datasets: {len(all_data_frames)} types")
-            # Return the first one for now, but in practice you might want to handle multiple
-            # datasets differently (write separately with different partitioning)
-            return all_data_frames
-        
-    except Exception as e:
-        logger.error(f"Error processing scraped data: {str(e)}")
+        return results
+    else:
+        logger.warning("No supplemental data processed")
         return None
 
-def write_to_silver(df, partition_cols=None):
+# ============================================================================
+# Scraped Data Processing - REMOVED
+# ============================================================================
+# Scraped/realtime data processing has been moved to a separate Glue job
+# that handles real-time data ingestion from the Mock API.
+# This job focuses on batch processing of historical and supplemental data.
+
+def write_to_silver(df, partition_cols=None, subdirectory=None):
     """
     Write cleaned data to Silver bucket in Parquet format.
+    
+    Args:
+        df: DataFrame to write
+        partition_cols: List of columns to partition by
+        subdirectory: Optional subdirectory path (e.g., 'weather', 'terrorism', 'supplemental', 'historical', 'scraped')
     """
     logger.info("Writing data to Silver bucket")
     
     try:
-        silver_path = f"s3://{SILVER_BUCKET}/"
+        if subdirectory:
+            silver_path = f"s3://{SILVER_BUCKET}/{subdirectory}/"
+            logger.info(f"Writing to subdirectory: {subdirectory}")
+        else:
+            silver_path = f"s3://{SILVER_BUCKET}/"
+        
+        record_count = df.count()
         
         if partition_cols:
             df.write \
@@ -491,7 +533,7 @@ def write_to_silver(df, partition_cols=None):
                 .mode("append") \
                 .parquet(silver_path)
         
-        logger.info(f"Successfully wrote {df.count()} records to Silver bucket")
+        logger.info(f"Successfully wrote {record_count} records to Silver bucket: {silver_path}")
         
     except Exception as e:
         logger.error(f"Error writing to Silver bucket: {str(e)}")
@@ -507,29 +549,67 @@ try:
     logger.info("Starting Data Cleaning Job")
     logger.info("=" * 80)
     
-    # Process historical data (main dataset)
+    # ============================================================================
+    # Process Historical Data (Main Dataset)
+    # ============================================================================
+    logger.info("Processing historical flight data...")
     historical_df = process_historical_data()
     
     if historical_df is not None:
-        # Write to Silver with partitioning
-        write_to_silver(historical_df, partition_cols=["Year", "Month"])
+        record_count = historical_df.count()
+        logger.info(f"Historical data ready to write: {record_count} records")
+        # Write to Silver with partitioning in historical/ subdirectory
+        write_to_silver(historical_df, partition_cols=["Year", "Month"], subdirectory="historical")
+        logger.info("Historical data written successfully to s3://{}/historical/".format(SILVER_BUCKET))
+    else:
+        logger.warning("Historical data processing returned None - check logs above for errors")
+        logger.warning("Possible causes: schema validation failed, no data in s3://{}/historical/, or processing error".format(RAW_BUCKET))
     
-    # Process supplemental data
-    supplemental_df = process_supplemental_data()
-    if supplemental_df is not None:
-        write_to_silver(supplemental_df)
+    # ============================================================================
+    # Process Supplemental Data (Weather, Terrorism, Other)
+    # ============================================================================
+    logger.info("Processing supplemental data...")
+    supplemental_results = process_supplemental_data()
     
-    # Process scraped data
-    scraped_result = process_scraped_data()
-    if scraped_result is not None:
-        if isinstance(scraped_result, list):
-            # Multiple dataframes (e.g., weather and flights separate)
-            for idx, df in enumerate(scraped_result):
-                logger.info(f"Writing scraped dataset {idx + 1} to Silver bucket")
-                write_to_silver(df)
+    if supplemental_results:
+        logger.info(f"Supplemental data processing returned {len(supplemental_results)} data types")
+        
+        # Write weather data to weather/ subdirectory
+        if 'weather' in supplemental_results:
+            weather_count = supplemental_results['weather'].count()
+            logger.info(f"Weather data ready to write: {weather_count} records")
+            write_to_silver(supplemental_results['weather'], subdirectory="weather")
+            logger.info("Weather data written successfully to s3://{}/weather/".format(SILVER_BUCKET))
         else:
-            # Single dataframe
-            write_to_silver(scraped_result)
+            logger.info("No weather data to write (may not exist in raw bucket)")
+        
+        # Write terrorism data to terrorism/ subdirectory
+        if 'terrorism' in supplemental_results:
+            terrorism_count = supplemental_results['terrorism'].count()
+            logger.info(f"Terrorism data ready to write: {terrorism_count} records")
+            write_to_silver(supplemental_results['terrorism'], subdirectory="terrorism")
+            logger.info("Terrorism data written successfully to s3://{}/terrorism/".format(SILVER_BUCKET))
+        else:
+            logger.info("No terrorism data to write (may not exist in raw bucket)")
+        
+        # Write other supplemental data to supplemental/ subdirectory
+        if 'supplemental' in supplemental_results:
+            other_count = supplemental_results['supplemental'].count()
+            logger.info(f"Other supplemental data ready to write: {other_count} records")
+            write_to_silver(supplemental_results['supplemental'], subdirectory="supplemental")
+            logger.info("Other supplemental data written successfully to s3://{}/supplemental/".format(SILVER_BUCKET))
+        else:
+            logger.info("No other supplemental data to write")
+    else:
+        logger.warning("No supplemental data processed - check if data exists in s3://{}/supplemental/".format(RAW_BUCKET))
+        logger.warning("Expected paths: s3://{}/supplemental/weather/ and s3://{}/supplemental/security/".format(RAW_BUCKET, RAW_BUCKET))
+    
+    # ============================================================================
+    # Scraped/Realtime Data Processing - REMOVED
+    # ============================================================================
+    # Scraped data from Mock API is now processed by a separate Glue job
+    # that handles real-time data ingestion. This job focuses on batch processing.
+    logger.info("Skipping scraped data processing (handled by separate real-time Glue job)")
     
     logger.info("=" * 80)
     logger.info("Data Cleaning Job Completed Successfully")
