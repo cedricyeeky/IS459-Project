@@ -92,6 +92,29 @@ resource "aws_security_group" "ecs_tasks" {
   )
 }
 
+# Security Group for Scraper ECS Tasks
+resource "aws_security_group" "scraper" {
+  name        = "${var.project_name}-${var.environment}-scraper-sg"
+  description = "Security group for scraper ECS tasks"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "Allow all outbound (for API calls and S3 access)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.project_name}-${var.environment}-scraper-sg"
+      Environment = var.environment
+    }
+  )
+}
+
 # Application Load Balancer
 resource "aws_lb" "main" {
   name               = "${var.project_name}-${var.environment}-alb"

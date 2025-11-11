@@ -79,6 +79,30 @@ variable "raw_data_retention_days" {
   default     = 90
 }
 
+variable "raw_lifecycle_days" {
+  description = "Days before transitioning raw bucket objects to IA"
+  type        = number
+  default     = 30
+}
+
+variable "silver_lifecycle_days" {
+  description = "Days before transitioning silver bucket objects to IA"
+  type        = number
+  default     = 60
+}
+
+variable "gold_lifecycle_days" {
+  description = "Days before transitioning gold bucket objects to IA"
+  type        = number
+  default     = 90
+}
+
+variable "dlq_expiration_days" {
+  description = "Days before expiring DLQ bucket objects"
+  type        = number
+  default     = 30
+}
+
 # ============================================
 # Mock API Configuration
 # ============================================
@@ -143,3 +167,37 @@ variable "scraper_schedule_expression" {
     error_message = "Schedule expression must be in EventBridge format: rate(X minutes|hours|days) or cron(...)"
   }
 }
+
+# ============================================
+# Glue ETL Configuration
+# ============================================
+variable "glue_version" {
+  description = "Glue version to use for jobs"
+  type        = string
+  default     = "4.0"
+}
+
+variable "glue_cleaning_worker_count" {
+  description = "Number of workers for data cleaning Glue job"
+  type        = number
+  default     = 2
+}
+
+variable "glue_cleaning_timeout" {
+  description = "Timeout in minutes for data cleaning Glue job"
+  type        = number
+  default     = 60
+}
+
+variable "glue_feature_worker_count" {
+  description = "Number of workers for feature engineering Glue job"
+  type        = number
+  default     = 2
+}
+
+variable "glue_feature_timeout" {
+  description = "Timeout in minutes for feature engineering Glue job"
+  type        = number
+  default     = 120
+}
+

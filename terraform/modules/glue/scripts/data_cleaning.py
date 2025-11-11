@@ -374,34 +374,102 @@ def process_supplemental_data():
 
 def process_scraped_data():
     """
-    Process scraped Wikipedia data (holidays, events).
+    Process scraped data from Mock API (weather and flights in JSON format).
     """
     logger.info("Processing scraped data")
     
     try:
-        scraped_path = f"s3://{RAW_BUCKET}/scraped/"
+        # Process weather data
+        weather_path = f"s3://{RAW_BUCKET}/scraped/weather/"
+        flights_path = f"s3://{RAW_BUCKET}/scraped/flights/"
         
-        # Read CSV files from scraping
-        df = spark.read \
-            .option("header", "true") \
-            .option("inferSchema", "true") \
-            .csv(scraped_path)
+        all_data_frames = []
         
-        logger.info(f"Read {df.count()} records from scraped data")
+        # Try to read weather JSON files
+        try:
+            logger.info(f"Reading weather data from {weather_path}")
+            weather_df = spark.read \
+                .option("multiLine", "true") \
+                .json(weather_path)
+            
+            if weather_df.count() > 0:
+                logger.info(f"Read {weather_df.count()} weather records")
+                
+                # Extract observations array if it exists (from the metadata structure)
+                if "observations" in weather_df.columns:
+                    from pyspark.sql.functions import explode
+                    weather_df = weather_df.select(explode(col("observations")).alias("observation"))
+                    weather_df = weather_df.select("observation.*")
+                    logger.info(f"Exploded observations: {weather_df.count()} records")
+                
+                # Deduplicate weather data using obs_id if available
+                if "obs_id" in weather_df.columns:
+                    weather_df = deduplicate_data(weather_df, ["obs_id"])
+                else:
+                    weather_df = deduplicate_data(weather_df)
+                
+                # Add processing metadata
+                weather_df = weather_df.withColumn("processing_timestamp", current_timestamp()) \
+                           .withColumn("source_layer", lit("raw")) \
+                           .withColumn("data_source", lit("scraped_weather"))
+                
+                all_data_frames.append(weather_df)
+                logger.info(f"Processed {weather_df.count()} weather records")
+        except Exception as e:
+            logger.warning(f"No weather data found or error processing: {str(e)}")
         
-        # Deduplicate (important for scraped data) - use all columns
-        df = deduplicate_data(df)
+        # Try to read flights JSON files
+        try:
+            logger.info(f"Reading flights data from {flights_path}")
+            flights_df = spark.read \
+                .option("multiLine", "true") \
+                .json(flights_path)
+            
+            if flights_df.count() > 0:
+                logger.info(f"Read {flights_df.count()} flight records")
+                
+                # Extract flights array if it exists (from the metadata structure)
+                if "flights" in flights_df.columns:
+                    from pyspark.sql.functions import explode
+                    flights_df = flights_df.select(explode(col("flights")).alias("flight"))
+                    flights_df = flights_df.select("flight.*")
+                    logger.info(f"Exploded flights: {flights_df.count()} records")
+                
+                # Deduplicate flights data
+                if "flight_id" in flights_df.columns:
+                    flights_df = deduplicate_data(flights_df, ["flight_id"])
+                elif all(col_name in flights_df.columns for col_name in ["flight_number", "scheduled_departure", "origin"]):
+                    flights_df = deduplicate_data(flights_df, ["flight_number", "scheduled_departure", "origin"])
+                else:
+                    flights_df = deduplicate_data(flights_df)
+                
+                # Add processing metadata
+                flights_df = flights_df.withColumn("processing_timestamp", current_timestamp()) \
+                           .withColumn("source_layer", lit("raw")) \
+                           .withColumn("data_source", lit("scraped_flights"))
+                
+                all_data_frames.append(flights_df)
+                logger.info(f"Processed {flights_df.count()} flight records")
+        except Exception as e:
+            logger.warning(f"No flights data found or error processing: {str(e)}")
         
-        # Add processing metadata
-        df = df.withColumn("processing_timestamp", current_timestamp()) \
-               .withColumn("source_layer", lit("raw")) \
-               .withColumn("data_source", lit("scraped"))
-        
-        logger.info(f"Scraped data processing complete: {df.count()} records")
-        return df
+        # Combine all scraped data if any exists
+        if len(all_data_frames) == 0:
+            logger.warning("No scraped data found")
+            return None
+        elif len(all_data_frames) == 1:
+            logger.info(f"Scraped data processing complete: {all_data_frames[0].count()} records")
+            return all_data_frames[0]
+        else:
+            # Return as separate dataframes or union if schemas are compatible
+            # For now, we'll write them separately
+            logger.info(f"Processed multiple scraped datasets: {len(all_data_frames)} types")
+            # Return the first one for now, but in practice you might want to handle multiple
+            # datasets differently (write separately with different partitioning)
+            return all_data_frames
         
     except Exception as e:
-        logger.warning(f"No scraped data found or error processing: {str(e)}")
+        logger.error(f"Error processing scraped data: {str(e)}")
         return None
 
 def write_to_silver(df, partition_cols=None):
@@ -452,9 +520,16 @@ try:
         write_to_silver(supplemental_df)
     
     # Process scraped data
-    scraped_df = process_scraped_data()
-    if scraped_df is not None:
-        write_to_silver(scraped_df)
+    scraped_result = process_scraped_data()
+    if scraped_result is not None:
+        if isinstance(scraped_result, list):
+            # Multiple dataframes (e.g., weather and flights separate)
+            for idx, df in enumerate(scraped_result):
+                logger.info(f"Writing scraped dataset {idx + 1} to Silver bucket")
+                write_to_silver(df)
+        else:
+            # Single dataframe
+            write_to_silver(scraped_result)
     
     logger.info("=" * 80)
     logger.info("Data Cleaning Job Completed Successfully")

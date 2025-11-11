@@ -1,0 +1,52 @@
+meta {
+  name: Get Weather Observations (All Airports)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/weather
+  body: none
+  auth: none
+}
+
+params:query {
+  limit: 20
+}
+
+docs {
+  # Get Weather Observations - All Airports
+  
+  Retrieve current weather observations from all available airports.
+  
+  ## Query Parameters
+  - `limit`: Number of observations (default: 20, max: 100)
+  - `airport`: Filter by specific airport code (optional)
+  
+  ## Weather Data Fields
+  - `obs_id`: Unique observation identifier
+  - `valid_time_gmt`: Observation time (Unix timestamp)
+  - `wx_phrase`: Weather condition description
+  - `temp`: Temperature (°F)
+  - `precip_hrly`: Hourly precipitation (inches)
+  - `snow_hrly`: Hourly snowfall (inches)
+  - `wspd`: Wind speed (mph)
+  - `clds`: Cloud coverage code (CLR, FEW, SCT, BKN, OVC)
+  - `rh`: Relative humidity (%)
+  - `vis`: Visibility (miles)
+  
+  ## Weather Phrases
+  Clear conditions: Clear, Fair, Few Clouds, Partly Cloudy
+  Cloudy conditions: Mostly Cloudy, Cloudy, Overcast, Scattered Clouds
+  Rain: Light Rain, Rain, Heavy Rain, Drizzle, Showers
+  Storms: Thunderstorms, Scattered Thunderstorms
+  Winter: Light Snow, Snow, Heavy Snow, Freezing Rain, Sleet
+  Reduced visibility: Fog, Haze, Mist
+  Wind: Windy, Breezy
+  
+  ## Use Cases
+  - Flight delay analysis by weather conditions
+  - Airport operational impact assessment
+  - Historical weather pattern analysis
+  - Correlation with flight reliability metrics
+}

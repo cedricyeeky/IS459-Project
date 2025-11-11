@@ -1,0 +1,47 @@
+meta {
+  name: Get Weather Observations (Specific Airport)
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{base_url}}/api/{{api_version}}/weather
+  body: none
+  auth: none
+}
+
+params:query {
+  airport: ORD
+  limit: 24
+}
+
+docs {
+  # Get Weather Observations - Specific Airport
+  
+  Retrieve weather observations for a specific airport with hourly historical data.
+  
+  ## Example: Chicago O'Hare (ORD)
+  Get 24 hours of weather observations for analysis.
+  
+  ## Parameters
+  - `airport`: ORD (Chicago O'Hare)
+  - `limit`: 24 (24 hourly observations)
+  
+  ## Cloud Coverage Codes
+  - `CLR` - Clear (0/8 sky coverage)
+  - `FEW` - Few clouds (1-2/8 sky coverage)
+  - `SCT` - Scattered (3-4/8 sky coverage)
+  - `BKN` - Broken (5-7/8 sky coverage)
+  - `OVC` - Overcast (8/8 sky coverage)
+  
+  ## Weather Impact on Flights
+  - **Heavy Rain/Snow**: High delay probability (30-240 min)
+  - **Thunderstorms**: Flight diversions, high delays
+  - **Fog (vis < 2 miles)**: Departure/arrival delays
+  - **High Winds (>25 mph)**: Landing restrictions
+  - **Freezing conditions**: De-icing delays
+  
+  ## Use Case
+  Correlate airport-specific weather with flight delays and cancellations
+  for that location. Useful for route-specific weather impact analysis.
+}

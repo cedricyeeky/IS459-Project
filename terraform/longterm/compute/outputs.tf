@@ -3,6 +3,11 @@ output "ecs_cluster_id" {
   value       = aws_ecs_cluster.main.id
 }
 
+output "ecs_cluster_arn" {
+  description = "ECS Cluster ARN"
+  value       = aws_ecs_cluster.main.arn
+}
+
 output "ecs_cluster_name" {
   description = "ECS Cluster name"
   value       = aws_ecs_cluster.main.name
@@ -46,4 +51,9 @@ output "ecs_task_role_arn" {
 output "mock_api_log_group" {
   description = "CloudWatch Log Group for Mock API"
   value       = aws_cloudwatch_log_group.mock_api.name
+}
+
+output "scraper_security_group_id" {
+  description = "Security Group ID for Scraper ECS tasks"
+  value       = aws_security_group.scraper.id
 }
