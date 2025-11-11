@@ -59,6 +59,12 @@ locals {
 }
 
 # ============================================================================
+# Account Information
+# ============================================================================
+
+data "aws_caller_identity" "current" {}
+
+# ============================================================================
 # IAM Module - Must be created first
 # ============================================================================
 
@@ -202,5 +208,39 @@ module "athena" {
   raw_bucket_name = module.s3.raw_bucket_name
 
   tags = local.common_tags
+}
+
+# ============================================================================
+# QuickSight Module - Visualization Layer
+# ============================================================================
+
+module "quicksight" {
+  count  = var.enable_quicksight ? 1 : 0
+  source = "./modules/quicksight"
+
+  resource_prefix = local.resource_prefix
+  environment     = var.environment
+  aws_account_id  = data.aws_caller_identity.current.account_id
+
+  athena_workgroup_name = module.athena.workgroup_name
+
+  tags = local.common_tags
+
+  quicksight_namespace          = var.quicksight_namespace
+  quicksight_edition            = var.quicksight_edition
+  authentication_method         = var.quicksight_authentication_method
+  create_account_subscription   = var.enable_quicksight && var.quicksight_account_name != "" && var.quicksight_notification_email != ""
+  quicksight_account_name       = var.quicksight_account_name
+  quicksight_notification_email = var.quicksight_notification_email != "" ? var.quicksight_notification_email : var.quicksight_admin_email
+
+  provision_admin_user        = var.enable_quicksight && var.quicksight_admin_email != "" && var.quicksight_admin_user_name != ""
+  quicksight_admin_email      = var.quicksight_admin_email
+  quicksight_identity_type    = var.quicksight_identity_type
+  quicksight_admin_user_name  = var.quicksight_admin_user_name
+  quicksight_admin_user_role  = var.quicksight_admin_user_role
+  authors_group_name          = var.quicksight_authors_group_name
+  readers_group_name          = var.quicksight_readers_group_name
+  data_source_id              = var.quicksight_data_source_id
+  data_source_name            = var.quicksight_data_source_name
 }
 

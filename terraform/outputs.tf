@@ -167,6 +167,30 @@ output "athena_named_queries" {
 }
 
 # ----------------------------------------------------------------------------
+# QuickSight Outputs
+# ----------------------------------------------------------------------------
+
+output "quicksight_data_source_arn" {
+  description = "ARN of the QuickSight Athena data source"
+  value       = length(module.quicksight) > 0 ? module.quicksight[0].data_source_arn : null
+}
+
+output "quicksight_authors_group_arn" {
+  description = "ARN of the QuickSight authors group"
+  value       = length(module.quicksight) > 0 ? module.quicksight[0].authors_group_arn : null
+}
+
+output "quicksight_readers_group_arn" {
+  description = "ARN of the QuickSight readers group"
+  value       = length(module.quicksight) > 0 ? module.quicksight[0].readers_group_arn : null
+}
+
+output "quicksight_admin_user_name" {
+  description = "QuickSight admin/author user name if provisioned"
+  value       = length(module.quicksight) > 0 ? module.quicksight[0].admin_user_name : null
+}
+
+# ----------------------------------------------------------------------------
 # Deployment Information
 # ----------------------------------------------------------------------------
 

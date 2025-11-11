@@ -79,6 +79,50 @@ resource "aws_s3_object" "raw_folders" {
 }
 
 # ----------------------------------------------------------------------------
+# QuickSight Access Policy for Raw Bucket (Athena Query Results)
+# ----------------------------------------------------------------------------
+
+# Get AWS account ID for QuickSight service role ARN
+data "aws_caller_identity" "current" {}
+
+# Policy document to allow QuickSight service role to write Athena query results
+data "aws_iam_policy_document" "raw_quicksight" {
+  statement {
+    sid    = "AllowQuickSightAthenaWrites"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/service-role/aws-quicksight-service-role-v0"
+      ]
+    }
+
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:AbortMultipartUpload",
+      "s3:PutObject"
+    ]
+
+    resources = [
+      aws_s3_bucket.raw.arn,
+      "${aws_s3_bucket.raw.arn}/*"
+    ]
+  }
+}
+
+# Attach the policy to the raw bucket
+resource "aws_s3_bucket_policy" "raw_quicksight" {
+  bucket = aws_s3_bucket.raw.id
+  policy = data.aws_iam_policy_document.raw_quicksight.json
+
+  depends_on = [aws_s3_bucket.raw]
+}
+
+# ----------------------------------------------------------------------------
 # Silver Data Bucket
 # ----------------------------------------------------------------------------
 
@@ -130,6 +174,45 @@ resource "aws_s3_bucket_lifecycle_configuration" "silver" {
 }
 
 # ----------------------------------------------------------------------------
+# QuickSight Access Policy for Silver Bucket (Data Read Access)
+# ----------------------------------------------------------------------------
+
+# Policy document to allow QuickSight service role to read data from silver bucket
+data "aws_iam_policy_document" "silver_quicksight" {
+  statement {
+    sid    = "AllowQuickSightDataRead"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/service-role/aws-quicksight-service-role-v0"
+      ]
+    }
+
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:GetObjectVersion"
+    ]
+
+    resources = [
+      aws_s3_bucket.silver.arn,
+      "${aws_s3_bucket.silver.arn}/*"
+    ]
+  }
+}
+
+# Attach the policy to the silver bucket
+resource "aws_s3_bucket_policy" "silver_quicksight" {
+  bucket = aws_s3_bucket.silver.id
+  policy = data.aws_iam_policy_document.silver_quicksight.json
+
+  depends_on = [aws_s3_bucket.silver]
+}
+
+# ----------------------------------------------------------------------------
 # Gold Data Bucket
 # ----------------------------------------------------------------------------
 
@@ -178,6 +261,45 @@ resource "aws_s3_bucket_lifecycle_configuration" "gold" {
       storage_class = "STANDARD_IA"
     }
   }
+}
+
+# ----------------------------------------------------------------------------
+# QuickSight Access Policy for Gold Bucket (Data Read Access)
+# ----------------------------------------------------------------------------
+
+# Policy document to allow QuickSight service role to read data from gold bucket
+data "aws_iam_policy_document" "gold_quicksight" {
+  statement {
+    sid    = "AllowQuickSightDataRead"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/service-role/aws-quicksight-service-role-v0"
+      ]
+    }
+
+    actions = [
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:GetObjectVersion"
+    ]
+
+    resources = [
+      aws_s3_bucket.gold.arn,
+      "${aws_s3_bucket.gold.arn}/*"
+    ]
+  }
+}
+
+# Attach the policy to the gold bucket
+resource "aws_s3_bucket_policy" "gold_quicksight" {
+  bucket = aws_s3_bucket.gold.id
+  policy = data.aws_iam_policy_document.gold_quicksight.json
+
+  depends_on = [aws_s3_bucket.gold]
 }
 
 # ----------------------------------------------------------------------------
