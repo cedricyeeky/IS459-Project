@@ -161,7 +161,6 @@ SELECT
     origin_airport,
     destination_airport,
     scheduled_departure,
-    status,
     delay_reason,
     cascade_risk
 FROM realtime_flights

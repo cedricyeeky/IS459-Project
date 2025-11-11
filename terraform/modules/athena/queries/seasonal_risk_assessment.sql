@@ -1,188 +1,116 @@
--- ============================================================================
--- BQ2: Seasonal Risk Assessment with Weather Impact Guidance
--- ============================================================================
--- Combines real-time flight data, weather data, and historical Gold layer
--- Output: Seasonal risk assessments and weather impact guidance
+-- SEASONAL RISK ASSESSMENT
+-- Rewritten to use actual available schema from flights table
+-- Original purpose: Seasonal risk patterns and weather-based delay assessment
+-- Simplified: Derives season from flight_date, uses cascade_risk and delay patterns
 
-WITH realtime_seasonal_analysis AS (
-    -- Real-time seasonal performance from mock API
+WITH seasonal_flights AS (
     SELECT
         origin_airport,
         destination_airport,
-        -- Derive season from flight_date
+        carrier,
+        flight_date,
+        month,
+        day_of_week,
+        hour_of_day,
+        arrival_delay_minutes,
+        departure_delay_minutes,
+        is_cancelled,
+        is_diverted,
+        cascade_risk,
+        CASE WHEN arrival_delay_minutes <= 15 THEN 1 ELSE 0 END AS on_time_flag,
+        CASE WHEN arrival_delay_minutes > 15 THEN 1 ELSE 0 END AS delayed_flag,
+        -- Derive season from month
         CASE
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (12, 1, 2) THEN 'winter'
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (3, 4, 5) THEN 'spring'
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (6, 7, 8) THEN 'summer'
-            ELSE 'fall'
+            WHEN month IN (12, 1, 2) THEN 'Winter'
+            WHEN month IN (3, 4, 5) THEN 'Spring'
+            WHEN month IN (6, 7, 8) THEN 'Summer'
+            WHEN month IN (9, 10, 11) THEN 'Fall'
         END AS season,
-        COUNT(*) AS total_flights,
-        SUM(CASE WHEN on_time THEN 1 ELSE 0 END) AS on_time_flights,
-        SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) AS cancelled_flights,
-        ROUND(100.0 * SUM(CASE WHEN on_time THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
-        ROUND(100.0 * SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
-        ROUND(APPROX_PERCENTILE(arrival_delay_minutes, 0.9), 2) AS p90_arrival_delay
-    FROM
-        realtime_flights
-    WHERE
-        timestamp >= CURRENT_TIMESTAMP - INTERVAL '90' DAY
-    GROUP BY
-        origin_airport, destination_airport,
-        CASE
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (12, 1, 2) THEN 'winter'
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (3, 4, 5) THEN 'spring'
-            WHEN EXTRACT(MONTH FROM CAST(flight_date AS DATE)) IN (6, 7, 8) THEN 'summer'
-            ELSE 'fall'
-        END
-    HAVING
-        COUNT(*) >= 10
+        -- Weekend flag
+        CASE WHEN day_of_week IN ('Saturday', 'Sunday') THEN 1 ELSE 0 END AS is_weekend
+    FROM "flight-delays-dev-db".flights
+    WHERE FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '90' DAY
 ),
 
-realtime_weather_impact AS (
-    -- Real-time weather impact analysis
+seasonal_performance AS (
     SELECT
-        r.origin_airport,
-        r.destination_airport,
-        r.season,
-        -- Weather severity calculation
-        CASE 
-            WHEN w.precip_hrly > 0.5 THEN 8
-            WHEN w.precip_hrly > 0.1 THEN 5
-            WHEN w.snow_hrly > 0 THEN 9
-            WHEN w.wspd > 30 THEN 7
-            WHEN w.wspd > 20 THEN 4
-            WHEN w.vis < 1.0 THEN 8
-            WHEN w.vis < 3.0 THEN 5
-            WHEN w.temp < 32 OR w.temp > 95 THEN 3
-            ELSE 1
-        END AS weather_severity_score,
-        CASE 
-            WHEN w.precip_hrly > 0.5 OR w.snow_hrly > 0 OR w.wspd > 30 OR w.vis < 1.0 THEN 'severe'
-            WHEN w.precip_hrly > 0.1 OR w.wspd > 20 OR w.vis < 3.0 THEN 'moderate'
-            WHEN w.temp < 32 OR w.temp > 95 THEN 'mild'
-            ELSE 'normal'
-        END AS weather_impact_category,
-        COUNT(*) AS weather_affected_flights,
-        SUM(CASE WHEN r.is_delayed THEN 1 ELSE 0 END) AS weather_delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN r.is_delayed THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS weather_impact_pct
-    FROM
-        realtime_flights r
-    JOIN
-        realtime_weather w
-        ON SUBSTRING(w.obs_id, 2, 3) = r.origin_airport
-        AND DATE(FROM_UNIXTIME(w.valid_time_gmt)) = DATE(r.flight_date)
-    WHERE
-        r.timestamp >= CURRENT_TIMESTAMP - INTERVAL '90' DAY
-    GROUP BY
-        r.origin_airport, r.destination_airport,
-        CASE
-            WHEN EXTRACT(MONTH FROM CAST(r.flight_date AS DATE)) IN (12, 1, 2) THEN 'winter'
-            WHEN EXTRACT(MONTH FROM CAST(r.flight_date AS DATE)) IN (3, 4, 5) THEN 'spring'
-            WHEN EXTRACT(MONTH FROM CAST(r.flight_date AS DATE)) IN (6, 7, 8) THEN 'summer'
-            ELSE 'fall'
-        END,
-        CASE 
-            WHEN w.precip_hrly > 0.5 THEN 8
-            WHEN w.precip_hrly > 0.1 THEN 5
-            WHEN w.snow_hrly > 0 THEN 9
-            WHEN w.wspd > 30 THEN 7
-            WHEN w.wspd > 20 THEN 4
-            WHEN w.vis < 1.0 THEN 8
-            WHEN w.vis < 3.0 THEN 5
-            WHEN w.temp < 32 OR w.temp > 95 THEN 3
-            ELSE 1
-        END,
-        CASE 
-            WHEN w.precip_hrly > 0.5 OR w.snow_hrly > 0 OR w.wspd > 30 OR w.vis < 1.0 THEN 'severe'
-            WHEN w.precip_hrly > 0.1 OR w.wspd > 20 OR w.vis < 3.0 THEN 'moderate'
-            WHEN w.temp < 32 OR w.temp > 95 THEN 'mild'
-            ELSE 'normal'
-        END
-),
-
-historical_seasonal_analysis AS (
-    -- Historical seasonal performance from Gold layer
-    SELECT
-        Origin AS origin_airport,
-        Dest AS destination_airport,
         season,
+        origin_airport,
+        destination_airport,
         COUNT(*) AS total_flights,
-        SUM(on_time_flag) AS on_time_flights,
-        SUM(cancelled_flag) AS cancelled_flights,
+        SUM(on_time_flag) AS on_time_count,
+        SUM(delayed_flag) AS delayed_count,
+        SUM(CASE WHEN is_cancelled = true THEN 1 ELSE 0 END) AS cancelled_count,
+        SUM(CASE WHEN cascade_risk = true THEN 1 ELSE 0 END) AS cascade_events,
         ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
-        ROUND(100.0 * SUM(cancelled_flag) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_arrival_delay,
-        ROUND(PERCENTILE_APPROX(ArrDelay, 0.9, 100), 2) AS p90_arrival_delay
-    FROM
-        flight_features
-    WHERE
-        Year >= 2005
-    GROUP BY
-        Origin, Dest, season
-    HAVING
-        COUNT(*) >= 30
+        ROUND(100.0 * SUM(delayed_flag) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(100.0 * SUM(CASE WHEN is_cancelled = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
+        ROUND(100.0 * SUM(CASE WHEN cascade_risk = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cascade_rate_pct,
+        ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
+        ROUND(AVG(departure_delay_minutes), 2) AS avg_departure_delay,
+        ROUND(MAX(arrival_delay_minutes), 2) AS max_delay,
+        ROUND(STDDEV(arrival_delay_minutes), 2) AS stddev_arrival_delay
+    FROM seasonal_flights
+    GROUP BY season, origin_airport, destination_airport
+    HAVING COUNT(*) >= 10  -- Require minimum sample
+),
+
+weekend_vs_weekday AS (
+    SELECT
+        season,
+        is_weekend,
+        COUNT(*) AS total_flights,
+        ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
+        ROUND(100.0 * SUM(delayed_flag) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(arrival_delay_minutes), 2) AS avg_delay
+    FROM seasonal_flights
+    GROUP BY season, is_weekend
+),
+
+carrier_seasonal_performance AS (
+    SELECT
+        season,
+        carrier,
+        COUNT(*) AS total_flights,
+        ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS carrier_on_time_rate_pct,
+        ROUND(AVG(arrival_delay_minutes), 2) AS carrier_avg_delay
+    FROM seasonal_flights
+    GROUP BY season, carrier
+    HAVING COUNT(*) >= 5
 )
 
--- Main Result: Seasonal Risk Assessment
+-- FINAL OUTPUT: Seasonal risk assessment with rankings
 SELECT
-    COALESCE(r.origin_airport, h.origin_airport) AS origin_airport,
-    COALESCE(r.destination_airport, h.destination_airport) AS destination_airport,
-    COALESCE(r.season, h.season) AS season,
-    -- Real-time metrics
-    r.total_flights AS realtime_flight_count,
-    r.on_time_rate_pct AS realtime_on_time_rate_pct,
-    r.cancellation_rate_pct AS realtime_cancellation_rate_pct,
-    r.avg_arrival_delay AS realtime_avg_delay,
-    r.p90_arrival_delay AS realtime_p90_delay,
-    -- Historical metrics
-    h.total_flights AS historical_flight_count,
-    h.on_time_rate_pct AS historical_on_time_rate_pct,
-    h.cancellation_rate_pct AS historical_cancellation_rate_pct,
-    h.avg_arrival_delay AS historical_avg_delay,
-    h.p90_arrival_delay AS historical_p90_delay,
-    -- Weather impact
-    w.weather_impact_pct,
-    w.weather_impact_category,
-    w.weather_affected_flights,
-    -- Combined risk level
+    sp.season,
+    sp.origin_airport,
+    sp.destination_airport,
+    sp.total_flights,
+    sp.on_time_rate_pct,
+    sp.delay_rate_pct,
+    sp.cancellation_rate_pct,
+    sp.cascade_rate_pct,
+    sp.avg_arrival_delay,
+    sp.avg_departure_delay,
+    sp.max_delay,
+    sp.stddev_arrival_delay,
+    wvw_weekday.on_time_rate_pct AS weekday_on_time_rate,
+    wvw_weekend.on_time_rate_pct AS weekend_on_time_rate,
+    csp.carrier_on_time_rate_pct AS carrier_avg_on_time_rate,
+    -- Risk score: combine delay rate, cancellation rate, cascade rate, and variability
+    ROUND((sp.delay_rate_pct + sp.cancellation_rate_pct * 2 + sp.cascade_rate_pct * 1.5 + COALESCE(sp.stddev_arrival_delay, 0) / 10), 2) AS seasonal_risk_score,
     CASE
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) < 60 
-             OR COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) > 10 THEN 'HIGH_RISK'
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) < 70 
-             OR COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) > 5 THEN 'MEDIUM_RISK'
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) < 80 THEN 'LOW_RISK'
+        WHEN sp.delay_rate_pct >= 40 OR sp.cascade_rate_pct >= 30 THEN 'HIGH_RISK'
+        WHEN sp.delay_rate_pct >= 25 OR sp.cascade_rate_pct >= 15 THEN 'MEDIUM_RISK'
         ELSE 'LOW_RISK'
-    END AS risk_level,
-    -- Seasonal guidance
-    CASE
-        WHEN r.season = 'winter' AND w.weather_impact_pct > 20 THEN 'HIGH weather risk - Consider travel insurance'
-        WHEN r.season = 'summer' AND w.weather_impact_pct > 15 THEN 'MODERATE weather risk - Monitor forecasts'
-        WHEN r.season IN ('spring', 'fall') AND COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) < 75 THEN 'MODERATE risk - Book flexible tickets'
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 80 THEN 'LOW risk - Standard booking OK'
-        ELSE 'MODERATE risk - Review cancellation policies'
-    END AS travel_guidance,
-    -- Best season ranking for this route
-    ROW_NUMBER() OVER (
-        PARTITION BY 
-            COALESCE(r.origin_airport, h.origin_airport),
-            COALESCE(r.destination_airport, h.destination_airport)
-        ORDER BY 
-            COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) DESC,
-            COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) ASC
-    ) AS season_rank
-FROM
-    realtime_seasonal_analysis r
-FULL OUTER JOIN
-    historical_seasonal_analysis h
-    ON r.origin_airport = h.origin_airport
-    AND r.destination_airport = h.destination_airport
-    AND r.season = h.season
-LEFT JOIN
-    realtime_weather_impact w
-    ON r.origin_airport = w.origin_airport
-    AND r.destination_airport = w.destination_airport
-    AND r.season = w.season
-ORDER BY
-    origin_airport, destination_airport, season_rank;
-
+    END AS risk_category
+FROM seasonal_performance sp
+LEFT JOIN weekend_vs_weekday wvw_weekday 
+    ON sp.season = wvw_weekday.season 
+    AND wvw_weekday.is_weekend = 0
+LEFT JOIN weekend_vs_weekday wvw_weekend 
+    ON sp.season = wvw_weekend.season 
+    AND wvw_weekend.is_weekend = 1
+LEFT JOIN carrier_seasonal_performance csp 
+    ON sp.season = csp.season
+ORDER BY sp.season, seasonal_risk_score DESC
+LIMIT 100;

@@ -14,26 +14,24 @@ WITH aircraft_cascades AS (
         COUNT(*) AS flights_per_day,
         SUM(CASE WHEN cascade_trigger_flag = 1 THEN 1 ELSE 0 END) AS cascade_triggers,
         SUM(CASE WHEN cascade_follow_flag = 1 THEN 1 ELSE 0 END) AS cascade_events,
-        SUM(CASE WHEN delay_cascaded > 0 THEN 1 ELSE 0 END) AS cascaded_flights,
+        SUM(CASE WHEN TRY_CAST(delay_cascaded AS DOUBLE) > 0 THEN 1 ELSE 0 END) AS cascaded_flights,
         MAX(cascade_depth) AS max_cascade_depth,
         ROUND(AVG(cascade_depth), 2) AS avg_cascade_depth,
-        ROUND(SUM(delay_cascaded), 2) AS total_delay_cascaded_minutes,
-        ROUND(AVG(turnaround_time_minutes), 2) AS avg_turnaround_minutes,
-        ROUND(AVG(buffer_adequacy_ratio), 2) AS avg_buffer_adequacy,
+        ROUND(SUM(TRY_CAST(delay_cascaded AS DOUBLE)), 2) AS total_delay_cascaded_minutes,
+        ROUND(AVG(TRY_CAST(turnaround_time_minutes AS DOUBLE)), 2) AS avg_turnaround_minutes,
+        ROUND(AVG(TRY_CAST(buffer_adequacy_ratio AS DOUBLE)), 2) AS avg_buffer_adequacy,
         COUNT(CASE WHEN buffer_adequacy_category = 'insufficient' THEN 1 END) AS insufficient_buffer_flights,
         COUNT(CASE WHEN buffer_adequacy_category = 'adequate' THEN 1 END) AS adequate_buffer_flights,
         SUM(CASE WHEN recovered_from_delay = 1 THEN 1 ELSE 0 END) AS recovery_events
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 2005
+        AND cancelled = 0
         AND TailNum IS NOT NULL
         AND is_valid_rotation = 1
     GROUP BY
         TailNum, flight_date, Origin, Dest
-    HAVING
-        COUNT(*) >= 3  -- Only aircraft with 3+ flights per day
 ),
 
 -- Buffer Effectiveness Analysis
@@ -43,14 +41,14 @@ buffer_effectiveness AS (
         COUNT(*) AS total_flights,
         SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) AS cascade_count,
         ROUND(100.0 * SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cascade_rate_pct,
-        ROUND(AVG(turnaround_time_minutes), 2) AS avg_turnaround_minutes,
-        ROUND(AVG(delay_cascaded), 2) AS avg_delay_cascaded_minutes,
-        ROUND(AVG(buffer_shortfall_minutes), 2) AS avg_buffer_shortfall
+        ROUND(AVG(TRY_CAST(turnaround_time_minutes AS DOUBLE)), 2) AS avg_turnaround_minutes,
+        ROUND(AVG(TRY_CAST(delay_cascaded AS DOUBLE)), 2) AS avg_delay_cascaded_minutes,
+        ROUND(AVG(TRY_CAST(buffer_shortfall_minutes AS DOUBLE)), 2) AS avg_buffer_shortfall
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 2005
+        AND cancelled = 0
         AND buffer_adequacy_category IS NOT NULL
         AND is_valid_rotation = 1
     GROUP BY
@@ -63,13 +61,13 @@ cascade_depth_distribution AS (
         cascade_depth,
         COUNT(*) AS flight_count,
         ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 2) AS pct_of_total,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
-        ROUND(AVG(delay_cascaded), 2) AS avg_delay_cascaded
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
+        ROUND(AVG(TRY_CAST(delay_cascaded AS DOUBLE)), 2) AS avg_delay_cascaded
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 2005
+        AND cancelled = 0
         AND cascade_depth > 0
     GROUP BY
         cascade_depth
@@ -80,13 +78,13 @@ recovery_analysis AS (
     SELECT
         cascade_depth AS depth_before_recovery,
         COUNT(*) AS recovery_count,
-        ROUND(AVG(turnaround_time_minutes), 2) AS avg_recovery_turnaround,
-        ROUND(AVG(buffer_adequacy_ratio), 2) AS avg_buffer_at_recovery
+        ROUND(AVG(TRY_CAST(turnaround_time_minutes AS DOUBLE)), 2) AS avg_recovery_turnaround,
+        ROUND(AVG(TRY_CAST(buffer_adequacy_ratio AS DOUBLE)), 2) AS avg_buffer_at_recovery
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 2005
+        AND cancelled = 0
         AND recovered_from_delay = 1
         AND cascade_depth > 0
     GROUP BY
@@ -121,7 +119,7 @@ SELECT
 FROM
     aircraft_cascades
 WHERE
-    cascade_events > 0  -- Focus on aircraft with actual cascades
+    flights_per_day >= 1  -- Focus on any aircraft with flights
 ORDER BY
     cascade_events DESC,
     max_cascade_depth DESC,

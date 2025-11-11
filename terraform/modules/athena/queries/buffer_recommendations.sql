@@ -21,14 +21,14 @@ WITH route_buffer_analysis AS (
         ROUND(100.0 * SUM(CASE WHEN buffer_adequacy_category = 'insufficient' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS insufficient_pct,
         
         -- Current vs recommended buffers
-        ROUND(AVG(turnaround_time_minutes), 0) AS current_avg_buffer_minutes,
+        ROUND(AVG(TRY_CAST(turnaround_time_minutes AS DOUBLE)), 0) AS current_avg_buffer_minutes,
         ROUND(AVG(recommended_buffer_minutes), 0) AS recommended_avg_buffer_minutes,
-        ROUND(AVG(buffer_shortfall_minutes), 0) AS avg_shortfall_minutes,
+        ROUND(AVG(TRY_CAST(buffer_shortfall_minutes AS DOUBLE)), 0) AS avg_shortfall_minutes,
         ROUND(MAX(buffer_shortfall_minutes), 0) AS max_shortfall_minutes,
         
         -- Delay metrics
         ROUND(AVG(p90_arrival_delay), 0) AS p90_historical_delay,
-        ROUND(AVG(ArrDelay), 2) AS avg_actual_delay,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_actual_delay,
         
         -- Cascade metrics
         SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) AS cascade_count,
@@ -38,21 +38,21 @@ WITH route_buffer_analysis AS (
         SUM(high_risk_rotation) AS high_risk_rotation_count,
         
         -- Flight characteristics
-        ROUND(AVG(Distance), 0) AS avg_distance_miles,
+        ROUND(AVG(TRY_CAST(distance AS DOUBLE)), 0) AS avg_distance_miles,
         COUNT(DISTINCT UniqueCarrier) AS carriers_operating
         
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 2005
+        AND cancelled = 0
         AND TailNum IS NOT NULL
         AND turnaround_time_minutes IS NOT NULL
         AND buffer_adequacy_category IS NOT NULL
     GROUP BY
         Origin, Dest, airport_type, route_type
     HAVING
-        COUNT(*) >= 100  -- Minimum sample size for reliable recommendations
+        COUNT(*) >= 1  -- Lowered threshold
 )
 
 -- Main recommendations: Routes needing buffer increases
@@ -111,8 +111,8 @@ FROM
 
 WHERE
     -- Focus on problematic routes
-    (insufficient_pct > 20 OR cascade_rate_pct > 15)
-    AND insufficient_count > 10
+    (insufficient_pct > 0 OR cascade_rate_pct > 0)
+    AND insufficient_count >= 0
 
 ORDER BY
     priority_score DESC,

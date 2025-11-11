@@ -1,131 +1,93 @@
--- ============================================================================
--- BQ1: Cascade Probability Matrix & High-Risk Station Identification
--- ============================================================================
--- Combines real-time flight data with historical Gold layer data
--- Output: Cascade probability matrices and high-risk station identification
+-- CASCADE PROBABILITY MATRIX & HIGH-RISK STATION IDENTIFICATION
+-- Rewritten to use actual available schema from flights table
+-- Original purpose: Identify cascade probability between stations and high-risk airports
+-- Simplified: Uses cascade_risk boolean flag and delay patterns
 
 WITH realtime_cascades AS (
-    -- Real-time cascade detection from mock API
     SELECT
         origin_airport,
         destination_airport,
         tail_number,
-        carrier_code,
+        carrier,
         flight_date,
         hour_of_day,
+        day_of_week,
         cascade_risk,
         arrival_delay_minutes,
         departure_delay_minutes,
-        status,
-        timestamp AS realtime_timestamp
-    FROM
-        realtime_flights
-    WHERE
-        cascade_risk = true
-        AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '24' HOUR
+        is_cancelled,
+        timestamp
+    FROM "flight-delays-dev-db".flights
+    WHERE FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '24' HOUR
 ),
 
-historical_cascade_metrics AS (
-    -- Historical cascade patterns from Gold layer
+cascade_by_route AS (
     SELECT
-        Origin AS origin_airport,
-        Dest AS destination_airport,
-        UniqueCarrier AS carrier_code,
-        Year,
-        Month,
+        origin_airport,
+        destination_airport,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) AS cascade_events,
-        ROUND(100.0 * SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cascade_rate_pct,
-        ROUND(AVG(delay_cascaded), 2) AS avg_delay_cascaded_minutes,
-        ROUND(AVG(turnaround_time_minutes), 2) AS avg_turnaround_minutes
-    FROM
-        flight_features
-    WHERE
-        Year >= 2005
-        AND Cancelled = 0
-        AND TailNum IS NOT NULL
-    GROUP BY
-        Origin, Dest, UniqueCarrier, Year, Month
-    HAVING
-        COUNT(*) >= 50
+        SUM(CASE WHEN cascade_risk = true THEN 1 ELSE 0 END) AS cascade_events,
+        ROUND(100.0 * SUM(CASE WHEN cascade_risk = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cascade_rate_pct,
+        ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
+        ROUND(AVG(departure_delay_minutes), 2) AS avg_departure_delay,
+        SUM(CASE WHEN is_cancelled = true THEN 1 ELSE 0 END) AS cancellations
+    FROM realtime_cascades
+    GROUP BY origin_airport, destination_airport
+    HAVING COUNT(*) >= 5  -- Require minimum sample size
 ),
 
-airport_cascade_risk AS (
-    -- High-risk station identification
+origin_risk_scores AS (
     SELECT
-        COALESCE(r.origin_airport, h.origin_airport) AS airport_code,
-        COUNT(DISTINCT r.flight_id) AS realtime_cascade_events,
-        COUNT(DISTINCT h.origin_airport || h.destination_airport || h.carrier_code) AS historical_cascade_routes,
-        ROUND(AVG(h.cascade_rate_pct), 2) AS avg_historical_cascade_rate,
-        ROUND(AVG(r.arrival_delay_minutes), 2) AS avg_realtime_delay,
-        MAX(r.arrival_delay_minutes) AS max_realtime_delay
-    FROM
-        realtime_cascades r
-    FULL OUTER JOIN
-        historical_cascade_metrics h
-        ON r.origin_airport = h.origin_airport
-    GROUP BY
-        COALESCE(r.origin_airport, h.origin_airport)
+        origin_airport,
+        COUNT(DISTINCT destination_airport) AS destinations_served,
+        SUM(total_flights) AS total_departures,
+        SUM(cascade_events) AS total_cascade_triggers,
+        ROUND(100.0 * SUM(cascade_events) / NULLIF(SUM(total_flights), 0), 2) AS origin_cascade_rate_pct,
+        ROUND(AVG(avg_arrival_delay), 2) AS avg_downstream_delay,
+        SUM(cancellations) AS total_cancellations
+    FROM cascade_by_route
+    GROUP BY origin_airport
+),
+
+destination_risk_scores AS (
+    SELECT
+        destination_airport,
+        COUNT(DISTINCT origin_airport) AS origins_served,
+        SUM(total_flights) AS total_arrivals,
+        SUM(cascade_events) AS total_cascade_impacts,
+        ROUND(100.0 * SUM(cascade_events) / NULLIF(SUM(total_flights), 0), 2) AS dest_cascade_rate_pct,
+        ROUND(AVG(avg_arrival_delay), 2) AS avg_arrival_delay,
+        SUM(cancellations) AS total_cancellations
+    FROM cascade_by_route
+    GROUP BY destination_airport
 )
 
--- Main Result: Cascade Probability Matrix & High-Risk Stations
+-- FINAL OUTPUT: Cascade probability matrix with high-risk stations
 SELECT
-    'Cascade Probability Matrix' AS analysis_type,
-    h.origin_airport AS source_airport,
-    h.destination_airport AS destination_airport,
-    h.carrier_code,
-    h.cascade_rate_pct AS historical_cascade_probability_pct,
-    COUNT(DISTINCT r.flight_id) AS realtime_cascade_count,
-    ROUND(AVG(r.arrival_delay_minutes), 2) AS avg_realtime_cascade_delay,
-    h.avg_delay_cascaded_minutes AS avg_historical_cascade_delay,
-    h.avg_turnaround_minutes,
-    h.total_flights AS historical_sample_size,
-    -- Risk level classification
+    'CASCADE_MATRIX' AS report_section,
+    cbr.origin_airport,
+    cbr.destination_airport,
+    cbr.total_flights,
+    cbr.cascade_events,
+    cbr.cascade_rate_pct,
+    cbr.avg_arrival_delay,
+    cbr.avg_departure_delay,
+    cbr.cancellations,
+    ors.origin_cascade_rate_pct AS origin_overall_cascade_rate,
+    drs.dest_cascade_rate_pct AS dest_overall_cascade_rate,
     CASE
-        WHEN h.cascade_rate_pct > 50 OR COUNT(DISTINCT r.flight_id) > 10 THEN 'CRITICAL'
-        WHEN h.cascade_rate_pct > 30 OR COUNT(DISTINCT r.flight_id) > 5 THEN 'HIGH'
-        WHEN h.cascade_rate_pct > 15 THEN 'MEDIUM'
+        WHEN cbr.cascade_rate_pct >= 50 THEN 'CRITICAL'
+        WHEN cbr.cascade_rate_pct >= 30 THEN 'HIGH'
+        WHEN cbr.cascade_rate_pct >= 15 THEN 'MEDIUM'
         ELSE 'LOW'
-    END AS risk_level
-FROM
-    historical_cascade_metrics h
-LEFT JOIN
-    realtime_cascades r
-    ON h.origin_airport = r.origin_airport
-    AND h.destination_airport = r.destination_airport
-    AND h.carrier_code = r.carrier_code
-GROUP BY
-    h.origin_airport, h.destination_airport, h.carrier_code,
-    h.cascade_rate_pct, h.avg_delay_cascaded_minutes, h.avg_turnaround_minutes, h.total_flights
-
-UNION ALL
-
--- High-Risk Station Summary
-SELECT
-    'High-Risk Station' AS analysis_type,
-    a.airport_code AS source_airport,
-    NULL AS destination_airport,
-    NULL AS carrier_code,
-    a.avg_historical_cascade_rate AS historical_cascade_probability_pct,
-    a.realtime_cascade_events AS realtime_cascade_count,
-    a.avg_realtime_delay AS avg_realtime_cascade_delay,
-    NULL AS avg_historical_cascade_delay,
-    NULL AS avg_turnaround_minutes,
-    NULL AS historical_sample_size,
+    END AS route_risk_level,
     CASE
-        WHEN a.avg_historical_cascade_rate > 40 OR a.realtime_cascade_events > 10 THEN 'CRITICAL'
-        WHEN a.avg_historical_cascade_rate > 30 OR a.realtime_cascade_events > 5 THEN 'HIGH'
-        WHEN a.avg_historical_cascade_rate > 20 THEN 'MEDIUM'
-        ELSE 'LOW'
-    END AS risk_level
-FROM
-    airport_cascade_risk a
-WHERE
-    a.avg_historical_cascade_rate > 15 OR a.realtime_cascade_events > 0
-
-ORDER BY
-    risk_level DESC,
-    historical_cascade_probability_pct DESC,
-    realtime_cascade_count DESC
-LIMIT 500;
-
+        WHEN ors.origin_cascade_rate_pct >= 40 THEN 'HIGH_RISK_ORIGIN'
+        WHEN drs.dest_cascade_rate_pct >= 40 THEN 'HIGH_RISK_DESTINATION'
+        ELSE 'NORMAL'
+    END AS station_risk_classification
+FROM cascade_by_route cbr
+LEFT JOIN origin_risk_scores ors ON cbr.origin_airport = ors.origin_airport
+LEFT JOIN destination_risk_scores drs ON cbr.destination_airport = drs.destination_airport
+ORDER BY cbr.cascade_rate_pct DESC, cbr.total_flights DESC
+LIMIT 50;

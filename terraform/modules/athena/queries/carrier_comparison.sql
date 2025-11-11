@@ -9,40 +9,38 @@ WITH competitive_routes AS (
     SELECT
         origin_airport,
         destination_airport,
-        COUNT(DISTINCT carrier_code) AS carrier_count
+        COUNT(DISTINCT carrier) AS carrier_count
     FROM
-        realtime_flights
+        "flight-delays-dev-db".flights
     WHERE
-        timestamp >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
+        FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
     GROUP BY
         origin_airport, destination_airport
     HAVING
-        COUNT(DISTINCT carrier_code) >= 2  -- At least 2 carriers
+        COUNT(DISTINCT carrier) >= 1  -- At least 1 carrier (show all routes)
 ),
 
 realtime_carrier_performance AS (
     -- Real-time carrier performance from mock API
     SELECT
-        carrier_code,
-        carrier_name,
+        carrier AS carrier_code,
         origin_airport,
         destination_airport,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN on_time THEN 1 ELSE 0 END) AS on_time_flights,
+        SUM(CASE WHEN arrival_delay_minutes <= 15 THEN 1 ELSE 0 END) AS on_time_flights,
         SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) AS cancelled_flights,
-        ROUND(100.0 * SUM(CASE WHEN on_time THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
+        ROUND(100.0 * SUM(CASE WHEN arrival_delay_minutes <= 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
         ROUND(100.0 * SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(carrier_reliability_score), 3) AS avg_reliability_score,
         ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
         ROUND(APPROX_PERCENTILE(arrival_delay_minutes, 0.8), 2) AS p80_arrival_delay
     FROM
-        realtime_flights
+        "flight-delays-dev-db".flights
     WHERE
-        timestamp >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
+        FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
     GROUP BY
-        carrier_code, carrier_name, origin_airport, destination_airport
+        carrier, origin_airport, destination_airport
     HAVING
-        COUNT(*) >= 20
+        COUNT(*) >= 1
 ),
 
 historical_carrier_performance AS (
@@ -52,21 +50,20 @@ historical_carrier_performance AS (
         Origin AS origin_airport,
         Dest AS destination_airport,
         COUNT(*) AS total_flights,
-        SUM(on_time_flag) AS on_time_flights,
-        SUM(cancelled_flag) AS cancelled_flights,
-        ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
-        ROUND(100.0 * SUM(cancelled_flag) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(reliability_score), 3) AS avg_reliability_score,
-        ROUND(AVG(ArrDelay), 2) AS avg_arrival_delay,
-        ROUND(PERCENTILE_APPROX(ArrDelay, 0.8, 100), 2) AS p80_arrival_delay
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) <= 15 THEN 1 ELSE 0 END) AS on_time_flights,
+        SUM(cancelled) AS cancelled_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) <= 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
+        ROUND(100.0 * SUM(cancelled) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_arrival_delay,
+        ROUND(APPROX_PERCENTILE(TRY_CAST(arrdelay AS DOUBLE), 0.8), 2) AS p80_arrival_delay
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
+        CAST(year AS INT) >= 1987
     GROUP BY
         UniqueCarrier, Origin, Dest
     HAVING
-        COUNT(*) >= 50
+        COUNT(*) >= 1
 ),
 
 carrier_route_performance AS (
@@ -75,30 +72,26 @@ carrier_route_performance AS (
         cr.origin_airport,
         cr.destination_airport,
         COALESCE(r.carrier_code, h.carrier_code) AS carrier_code,
-        r.carrier_name,
         -- Real-time metrics
         r.total_flights AS realtime_flight_count,
         r.on_time_rate_pct AS realtime_on_time_rate_pct,
         r.cancellation_rate_pct AS realtime_cancellation_rate_pct,
-        r.avg_reliability_score AS realtime_reliability_score,
         r.avg_arrival_delay AS realtime_avg_delay,
         r.p80_arrival_delay AS realtime_p80_delay,
         -- Historical metrics
         h.total_flights AS historical_flight_count,
         h.on_time_rate_pct AS historical_on_time_rate_pct,
         h.cancellation_rate_pct AS historical_cancellation_rate_pct,
-        h.avg_reliability_score AS historical_reliability_score,
         h.avg_arrival_delay AS historical_avg_delay,
         h.p80_arrival_delay AS historical_p80_delay,
-        -- Combined score (weighted: 60% historical, 40% real-time)
+        -- Combined score (weighted: 60% historical, 40% real-time on-time rate)
         ROUND(
-            COALESCE(h.avg_reliability_score, 0.5) * 0.6 +
-            COALESCE(r.avg_reliability_score, 0.5) * 0.4,
-        3) AS combined_reliability_score,
-        COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) AS combined_on_time_rate_pct
+            COALESCE(h.on_time_rate_pct, 0.0) * 0.6 +
+            COALESCE(r.on_time_rate_pct, 0.0) * 0.4,
+        2) AS combined_on_time_rate_pct
     FROM
         competitive_routes cr
-    INNER JOIN
+    LEFT JOIN
         realtime_carrier_performance r
         ON cr.origin_airport = r.origin_airport
         AND cr.destination_airport = r.destination_airport
@@ -114,7 +107,6 @@ SELECT
     origin_airport,
     destination_airport,
     carrier_code,
-    carrier_name,
     realtime_flight_count,
     historical_flight_count,
     combined_on_time_rate_pct,
@@ -122,9 +114,6 @@ SELECT
     historical_on_time_rate_pct,
     realtime_cancellation_rate_pct,
     historical_cancellation_rate_pct,
-    combined_reliability_score,
-    realtime_reliability_score,
-    historical_reliability_score,
     realtime_avg_delay,
     historical_avg_delay,
     realtime_p80_delay,
