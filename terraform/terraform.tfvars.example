@@ -65,7 +65,7 @@ crawler_schedule  = "cron(0 2 ? * SUN *)"   # Weekly Sundays at 2 AM UTC
 # QuickSight Configuration
 # ----------------------------------------------------------------------------
 
-# Set to true to enable QuickSight provisioning
+# IMPORTANT: Set to true to enable QuickSight provisioning
 enable_quicksight = false
 
 # Required when enable_quicksight is true and Terraform must create the subscription
@@ -77,4 +77,3 @@ enable_quicksight = false
 # quicksight_admin_user_name  = "flight-delays-admin"
 # quicksight_admin_user_role  = "AUTHOR"
 # quicksight_identity_type    = "QUICKSIGHT"
-
