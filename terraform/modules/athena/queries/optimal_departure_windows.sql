@@ -1,141 +1,116 @@
--- ============================================================================
--- BQ2: Optimal Departure Window Recommendations
--- ============================================================================
--- Combines real-time flight data with historical Gold layer data
--- Output: Optimal departure window recommendations
+-- OPTIMAL DEPARTURE WINDOWS
+-- Rewritten to use actual available schema from flights table
+-- Original purpose: Identify best departure hours with lowest delays
+-- Simplified: Derives on_time from arrival_delay_minutes threshold
 
-WITH realtime_hourly_performance AS (
-    -- Real-time performance by hour from mock API
+WITH flight_performance AS (
+    SELECT
+        origin_airport,
+        destination_airport,
+        carrier,
+        hour_of_day,
+        day_of_week,
+        flight_date,
+        arrival_delay_minutes,
+        departure_delay_minutes,
+        is_cancelled,
+        CASE WHEN arrival_delay_minutes <= 15 THEN 1 ELSE 0 END AS on_time_flag,
+        CASE WHEN arrival_delay_minutes > 15 THEN 1 ELSE 0 END AS delayed_flag,
+        CASE WHEN is_cancelled = true THEN 1 ELSE 0 END AS cancelled_flag
+    FROM "flight-delays-dev-db".flights
+    WHERE FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
+),
+
+hourly_performance AS (
     SELECT
         origin_airport,
         destination_airport,
         hour_of_day,
         day_of_week,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN on_time THEN 1 ELSE 0 END) AS on_time_flights,
-        SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) AS cancelled_flights,
-        ROUND(100.0 * SUM(CASE WHEN on_time THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
-        ROUND(100.0 * SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
-        ROUND(AVG(departure_delay_minutes), 2) AS avg_departure_delay
-    FROM
-        realtime_flights
-    WHERE
-        timestamp >= CURRENT_TIMESTAMP - INTERVAL '30' DAY
-        AND status IN ('scheduled', 'departed', 'arrived', 'landed')
-    GROUP BY
-        origin_airport, destination_airport, hour_of_day, day_of_week
-    HAVING
-        COUNT(*) >= 10
-),
-
-historical_hourly_performance AS (
-    -- Historical performance by hour from Gold layer
-    SELECT
-        Origin AS origin_airport,
-        Dest AS destination_airport,
-        flight_hour,
-        DayOfWeek,
-        COUNT(*) AS total_flights,
-        SUM(on_time_flag) AS on_time_flights,
-        SUM(cancelled_flag) AS cancelled_flights,
+        SUM(on_time_flag) AS on_time_count,
+        SUM(delayed_flag) AS delayed_count,
+        SUM(cancelled_flag) AS cancelled_count,
         ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS on_time_rate_pct,
+        ROUND(100.0 * SUM(delayed_flag) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
         ROUND(100.0 * SUM(cancelled_flag) / NULLIF(COUNT(*), 0), 2) AS cancellation_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_arrival_delay,
-        ROUND(AVG(DepDelay), 2) AS avg_departure_delay
-    FROM
-        flight_features
-    WHERE
-        Year >= 2005
-        AND Cancelled = 0
-    GROUP BY
-        Origin, Dest, flight_hour, DayOfWeek
-    HAVING
-        COUNT(*) >= 20
+        ROUND(AVG(arrival_delay_minutes), 2) AS avg_arrival_delay,
+        ROUND(AVG(departure_delay_minutes), 2) AS avg_departure_delay,
+        ROUND(STDDEV(arrival_delay_minutes), 2) AS stddev_arrival_delay
+    FROM flight_performance
+    GROUP BY origin_airport, destination_airport, hour_of_day, day_of_week
+    HAVING COUNT(*) >= 2  -- Require minimum sample size
 ),
 
-base_results AS (
-    -- Main Result: Optimal Departure Windows
+carrier_hourly_performance AS (
     SELECT
-    COALESCE(r.origin_airport, h.origin_airport) AS origin_airport,
-    COALESCE(r.destination_airport, h.destination_airport) AS destination_airport,
-    COALESCE(r.hour_of_day, h.flight_hour) AS hour_of_day,
-    COALESCE(r.day_of_week,
-        CASE h.DayOfWeek
-            WHEN 1 THEN 'Monday'
-            WHEN 2 THEN 'Tuesday'
-            WHEN 3 THEN 'Wednesday'
-            WHEN 4 THEN 'Thursday'
-            WHEN 5 THEN 'Friday'
-            WHEN 6 THEN 'Saturday'
-            WHEN 7 THEN 'Sunday'
-            ELSE 'Unknown'
-        END
-    ) AS day_of_week,
-    -- Real-time metrics
-    r.total_flights AS realtime_flight_count,
-    r.on_time_rate_pct AS realtime_on_time_rate_pct,
-    r.cancellation_rate_pct AS realtime_cancellation_rate_pct,
-    r.avg_arrival_delay AS realtime_avg_delay,
-    -- Historical metrics
-    h.total_flights AS historical_flight_count,
-    h.on_time_rate_pct AS historical_on_time_rate_pct,
-    h.cancellation_rate_pct AS historical_cancellation_rate_pct,
-    h.avg_arrival_delay AS historical_avg_delay,
-    -- Combined metrics (weighted average)
-    COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) AS combined_on_time_rate_pct,
-    COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) AS combined_cancellation_rate_pct,
-    -- Window quality recommendation
-    CASE
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 85 
-             AND COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) < 2 THEN 'OPTIMAL'
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 75 
-             AND COALESCE(r.cancellation_rate_pct, h.cancellation_rate_pct) < 5 THEN 'GOOD'
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 65 THEN 'ACCEPTABLE'
-        ELSE 'AVOID'
-    END AS window_quality,
-    -- Recommendation text
-    CASE
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 85 THEN 
-            CONCAT('Best time to fly - ', CAST(COALESCE(r.hour_of_day, h.flight_hour) AS VARCHAR), ':00 has ', 
-                   CAST(ROUND(COALESCE(r.on_time_rate_pct, h.on_time_rate_pct)) AS VARCHAR), '% on-time rate')
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 75 THEN 
-            CONCAT('Good option - ', CAST(COALESCE(r.hour_of_day, h.flight_hour) AS VARCHAR), ':00 typically reliable')
-        WHEN COALESCE(r.on_time_rate_pct, h.on_time_rate_pct) >= 65 THEN 
-            CONCAT('Acceptable - ', CAST(COALESCE(r.hour_of_day, h.flight_hour) AS VARCHAR), ':00 may have delays')
-        ELSE 
-            CONCAT('Avoid if possible - ', CAST(COALESCE(r.hour_of_day, h.flight_hour) AS VARCHAR), 
-                   ':00 has high delay risk')
-    END AS recommendation
-FROM
-    realtime_hourly_performance r
-FULL OUTER JOIN
-    historical_hourly_performance h
-    ON r.origin_airport = h.origin_airport
-    AND r.destination_airport = h.destination_airport
-    AND r.hour_of_day = h.flight_hour
-    AND r.day_of_week = CASE h.DayOfWeek
-        WHEN 1 THEN 'Monday'
-        WHEN 2 THEN 'Tuesday'
-        WHEN 3 THEN 'Wednesday'
-        WHEN 4 THEN 'Thursday'
-        WHEN 5 THEN 'Friday'
-        WHEN 6 THEN 'Saturday'
-        WHEN 7 THEN 'Sunday'
-        ELSE 'Unknown'
-    END
-WHERE
-    COALESCE(r.total_flights, h.total_flights) >= 10
-)
-SELECT * FROM (
-    SELECT *,
-        ROW_NUMBER() OVER (
-            PARTITION BY origin_airport, destination_airport
-            ORDER BY combined_on_time_rate_pct DESC, combined_cancellation_rate_pct ASC
-        ) AS reliability_rank
-    FROM base_results
-) ranked
-WHERE reliability_rank <= 5  -- Top 5 hours per route
-ORDER BY
-    origin_airport, destination_airport, reliability_rank;
+        carrier,
+        hour_of_day,
+        day_of_week,
+        COUNT(*) AS total_flights,
+        ROUND(100.0 * SUM(on_time_flag) / NULLIF(COUNT(*), 0), 2) AS carrier_on_time_rate_pct,
+        ROUND(AVG(arrival_delay_minutes), 2) AS carrier_avg_delay
+    FROM flight_performance
+    GROUP BY carrier, hour_of_day, day_of_week
+    HAVING COUNT(*) >= 2
+),
 
+departure_windows_ranked AS (
+    SELECT
+        hp.origin_airport,
+        hp.destination_airport,
+        hp.hour_of_day,
+        hp.day_of_week,
+        hp.total_flights,
+        hp.on_time_rate_pct,
+        hp.delay_rate_pct,
+        hp.cancellation_rate_pct,
+        hp.avg_arrival_delay,
+        hp.avg_departure_delay,
+        hp.stddev_arrival_delay,
+        chp.carrier_on_time_rate_pct AS carrier_avg_on_time_rate,
+        -- Optimal window score: higher on_time rate + lower std dev = better
+        ROUND(hp.on_time_rate_pct - (COALESCE(hp.stddev_arrival_delay, 0) / 2), 2) AS window_quality_score,
+        ROW_NUMBER() OVER (
+            PARTITION BY hp.origin_airport, hp.destination_airport, hp.day_of_week
+            ORDER BY hp.on_time_rate_pct DESC, hp.avg_arrival_delay ASC
+        ) AS hour_rank
+    FROM hourly_performance hp
+    LEFT JOIN carrier_hourly_performance chp 
+        ON hp.hour_of_day = chp.hour_of_day 
+        AND hp.day_of_week = chp.day_of_week
+)
+
+-- FINAL OUTPUT: Optimal departure windows by route and day
+SELECT
+    origin_airport,
+    destination_airport,
+    day_of_week,
+    hour_of_day AS optimal_departure_hour,
+    hour_rank,
+    total_flights,
+    on_time_rate_pct,
+    delay_rate_pct,
+    cancellation_rate_pct,
+    avg_arrival_delay,
+    avg_departure_delay,
+    stddev_arrival_delay,
+    carrier_avg_on_time_rate,
+    window_quality_score,
+    CASE
+        WHEN hour_of_day BETWEEN 5 AND 8 THEN 'EARLY_MORNING'
+        WHEN hour_of_day BETWEEN 9 AND 11 THEN 'LATE_MORNING'
+        WHEN hour_of_day BETWEEN 12 AND 16 THEN 'AFTERNOON'
+        WHEN hour_of_day BETWEEN 17 AND 20 THEN 'EVENING'
+        ELSE 'NIGHT'
+    END AS time_window,
+    CASE
+        WHEN on_time_rate_pct >= 85 THEN 'EXCELLENT'
+        WHEN on_time_rate_pct >= 70 THEN 'GOOD'
+        WHEN on_time_rate_pct >= 50 THEN 'FAIR'
+        ELSE 'POOR'
+    END AS window_quality
+FROM departure_windows_ranked
+WHERE hour_rank <= 3  -- Top 3 hours per route per day
+ORDER BY origin_airport, destination_airport, day_of_week, hour_rank
+LIMIT 100;

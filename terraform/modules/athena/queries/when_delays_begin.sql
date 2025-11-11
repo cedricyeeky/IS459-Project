@@ -13,21 +13,21 @@ WITH hourly_delays AS (
         season,
         is_weekend,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
-        ROUND(APPROX_PERCENTILE(ArrDelay, 0.90), 2) AS p90_delay_minutes,
-        ROUND(APPROX_PERCENTILE(ArrDelay, 0.50), 2) AS median_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
+        ROUND(APPROX_PERCENTILE(TRY_CAST(arrdelay AS DOUBLE), 0.90), 2) AS p90_delay_minutes,
+        ROUND(APPROX_PERCENTILE(TRY_CAST(arrdelay AS DOUBLE), 0.50), 2) AS median_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
         AND flight_hour IS NOT NULL
     GROUP BY
         Origin, hour_category, flight_hour, season, is_weekend
     HAVING
-        COUNT(*) >= 50  -- Minimum sample size for statistical significance
+        COUNT(*) >= 5  -- Lowered threshold for more results
 ),
 
 -- Seasonal Patterns
@@ -36,14 +36,14 @@ seasonal_analysis AS (
         season,
         hour_category,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
         season, hour_category
 ),
@@ -54,14 +54,14 @@ day_type_analysis AS (
         CASE WHEN is_weekend = 1 THEN 'Weekend' ELSE 'Weekday' END AS day_type,
         hour_category,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
         is_weekend, hour_category
 )
@@ -82,8 +82,6 @@ SELECT
     median_delay_minutes
 FROM
     hourly_delays
-WHERE
-    delay_rate_pct > 20  -- Focus on problematic hours
 ORDER BY
     delay_rate_pct DESC,
     avg_delay_minutes DESC
