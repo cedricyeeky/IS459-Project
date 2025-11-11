@@ -776,20 +776,410 @@ def create_holiday_impact_features(df, holiday_df=None):
                .withColumn("days_from_holiday", lit(None).cast("integer"))
         return df
 
+def read_silver_weather_data():
+    """
+    Read cleaned weather data from Silver bucket.
+    Weather data is identified by having obs_id and valid_time_gmt columns.
+    """
+    logger.info("Reading weather data from Silver bucket")
+    
+    try:
+        silver_path = f"s3://{SILVER_BUCKET}/"
+        all_silver = spark.read.parquet(silver_path)
+        
+        # Filter for weather data: supplemental source with weather identifiers
+        weather_df = all_silver.filter(
+            (col("data_source") == "supplemental") & 
+            (col("obs_id").isNotNull())
+        )
+        
+        weather_count = weather_df.count()
+        logger.info(f"Read {weather_count} weather records from Silver")
+        
+        if weather_count == 0:
+            logger.warning("No weather data found in Silver bucket")
+            return None
+        
+        # Log sample columns to verify structure
+        if weather_count > 0:
+            logger.info(f"Weather data columns: {weather_df.columns}")
+            logger.info("Sample weather record:")
+            weather_df.select("obs_id", "valid_time_gmt", "temp", "precip_hrly", "wspd", "vis").show(1, truncate=False)
+        
+        return weather_df
+        
+    except Exception as e:
+        logger.warning(f"Error reading weather data from Silver: {str(e)}")
+        return None
+
+def engineer_weather_features(weather_df):
+    """
+    Engineer features from weather data for downstream analysis.
+    Creates date columns, airport codes, and severity scores for joining with flight data.
+    """
+    logger.info("Engineering weather features")
+    
+    try:
+        from pyspark.sql.functions import from_unixtime, substring, upper
+        
+        # Convert valid_time_gmt (Unix timestamp) to date/time columns
+        weather_df = weather_df.withColumn(
+            "weather_timestamp",
+            from_unixtime(col("valid_time_gmt"))
+        ).withColumn(
+            "weather_date",
+            to_date(col("weather_timestamp"))
+        ).withColumn(
+            "Year",
+            when(col("weather_date").isNotNull(), 
+                 col("weather_date").cast("string").substr(1, 4).cast(IntegerType()))
+            .otherwise(lit(None).cast(IntegerType()))
+        ).withColumn(
+            "Month",
+            when(col("weather_date").isNotNull(),
+                 col("weather_date").cast("string").substr(6, 2).cast(IntegerType()))
+            .otherwise(lit(None).cast(IntegerType()))
+        ).withColumn(
+            "Day",
+            when(col("weather_date").isNotNull(),
+                 col("weather_date").cast("string").substr(9, 2).cast(IntegerType()))
+            .otherwise(lit(None).cast(IntegerType()))
+        )
+        
+        # Extract airport code from obs_id (format: KXXX where XXX is IATA code)
+        # obs_id might be like "KPHL" - extract last 3 chars for IATA code
+        weather_df = weather_df.withColumn(
+            "airport_code",
+            when(col("obs_id").isNotNull() & (col("obs_id").rlike("^K[A-Z]{3}$")),
+                 upper(substring(col("obs_id"), 2, 3)))  # Extract XXX from KXXX
+            .otherwise(col("obs_id"))  # Use as-is if not in expected format
+        )
+        
+        # Create weather severity score (0-10 scale)
+        # Higher score = worse weather conditions
+        weather_df = weather_df.withColumn(
+            "weather_severity_score",
+            when(
+                (col("precip_hrly").isNotNull()) & (col("precip_hrly") > 0.5), lit(8)  # Heavy precipitation
+            ).when(
+                (col("precip_hrly").isNotNull()) & (col("precip_hrly") > 0.1), lit(5)  # Light precipitation
+            ).when(
+                (col("snow_hrly").isNotNull()) & (col("snow_hrly") > 0), lit(9)  # Snow
+            ).when(
+                (col("wspd").isNotNull()) & (col("wspd") > 30), lit(7)  # High wind
+            ).when(
+                (col("wspd").isNotNull()) & (col("wspd") > 20), lit(4)  # Moderate wind
+            ).when(
+                (col("vis").isNotNull()) & (col("vis") < 1.0), lit(8)  # Low visibility
+            ).when(
+                (col("vis").isNotNull()) & (col("vis") < 3.0), lit(5)  # Reduced visibility
+            ).when(
+                (col("temp").isNotNull()) & (col("temp") < 32), lit(3)  # Freezing
+            ).when(
+                (col("temp").isNotNull()) & (col("temp") > 95), lit(3)  # Extreme heat
+            ).otherwise(lit(1))  # Normal conditions
+        )
+        
+        # Create weather impact categories
+        weather_df = weather_df.withColumn(
+            "weather_impact_category",
+            when(col("weather_severity_score") >= 8, lit("severe"))
+            .when(col("weather_severity_score") >= 5, lit("moderate"))
+            .when(col("weather_severity_score") >= 3, lit("mild"))
+            .otherwise(lit("normal"))
+        )
+        
+        # Create delay risk indicators
+        weather_df = weather_df.withColumn(
+            "high_delay_risk",
+            when(col("weather_severity_score") >= 5, lit(1)).otherwise(lit(0))
+        )
+        
+        # Normalize precipitation (handle nulls)
+        weather_df = weather_df.withColumn(
+            "precipitation_mm",
+            coalesce(col("precip_hrly"), lit(0.0))
+        )
+        
+        # Normalize wind speed (handle nulls)
+        weather_df = weather_df.withColumn(
+            "wind_speed_mph",
+            coalesce(col("wspd"), lit(0.0))
+        )
+        
+        # Normalize visibility (handle nulls)
+        weather_df = weather_df.withColumn(
+            "visibility_miles",
+            coalesce(col("vis"), lit(10.0))  # Default to good visibility
+        )
+        
+        # Add feature engineering metadata
+        weather_df = weather_df.withColumn("feature_eng_timestamp", current_timestamp()) \
+                                .withColumn("target_layer", lit("gold"))
+        
+        logger.info("Weather features engineered successfully")
+        
+        # Log statistics
+        if weather_df.count() > 0:
+            severity_stats = weather_df.groupBy("weather_impact_category").agg(
+                count("*").alias("count")
+            ).collect()
+            logger.info("Weather Impact Category Distribution:")
+            for row in severity_stats:
+                logger.info(f"  {row['weather_impact_category']}: {row['count']} records")
+        
+        return weather_df
+        
+    except Exception as e:
+        error_msg = f"Error engineering weather features: {str(e)}"
+        logger.error(error_msg)
+        return None
+
+def read_silver_terrorism_data():
+    """
+    Read cleaned terrorism data from Silver bucket.
+    Terrorism data is identified by having event_date or similar date columns.
+    """
+    logger.info("Reading terrorism data from Silver bucket")
+    
+    try:
+        silver_path = f"s3://{SILVER_BUCKET}/"
+        all_silver = spark.read.parquet(silver_path)
+        
+        # Filter for terrorism data: supplemental source
+        # Check for common terrorism data identifiers
+        terrorism_df = all_silver.filter(
+            (col("data_source") == "supplemental") & 
+            (
+                col("event_date").isNotNull() | 
+                col("date").isNotNull() |
+                col("iyear").isNotNull()  # Global Terrorism Database format
+            ) &
+            ~col("obs_id").isNotNull()  # Exclude weather data
+        )
+        
+        terrorism_count = terrorism_df.count()
+        logger.info(f"Read {terrorism_count} terrorism records from Silver")
+        
+        if terrorism_count == 0:
+            logger.warning("No terrorism data found in Silver bucket")
+            return None
+        
+        # Log sample columns to verify structure
+        if terrorism_count > 0:
+            logger.info(f"Terrorism data columns: {terrorism_df.columns}")
+            logger.info("Sample terrorism record:")
+            terrorism_df.show(1, truncate=False)
+        
+        return terrorism_df
+        
+    except Exception as e:
+        logger.warning(f"Error reading terrorism data from Silver: {str(e)}")
+        return None
+
+def engineer_terrorism_features(terrorism_df):
+    """
+    Engineer features from terrorism data for downstream analysis.
+    Creates date columns, severity categories, and airport/city mappings.
+    """
+    logger.info("Engineering terrorism features")
+    
+    try:
+        from pyspark.sql.functions import regexp_replace, lower
+        
+        # Handle different date column formats
+        # Try event_date first, then date, then construct from iyear/imonth/iday
+        if "event_date" in terrorism_df.columns:
+            terrorism_df = terrorism_df.withColumn(
+                "terrorism_date",
+                to_date(col("event_date"))
+            )
+        elif "date" in terrorism_df.columns:
+            terrorism_df = terrorism_df.withColumn(
+                "terrorism_date",
+                to_date(col("date"))
+            )
+        elif "iyear" in terrorism_df.columns and "imonth" in terrorism_df.columns and "iday" in terrorism_df.columns:
+            # Global Terrorism Database format
+            terrorism_df = terrorism_df.withColumn(
+                "terrorism_date",
+                to_date(concat_ws("-", 
+                    col("iyear").cast(StringType()),
+                    when(col("imonth") == 0, lit("01")).otherwise(
+                        when(col("imonth") < 10, concat(lit("0"), col("imonth").cast(StringType())))
+                        .otherwise(col("imonth").cast(StringType()))
+                    ),
+                    when(col("iday") == 0, lit("01")).otherwise(
+                        when(col("iday") < 10, concat(lit("0"), col("iday").cast(StringType())))
+                        .otherwise(col("iday").cast(StringType()))
+                    )
+                ))
+            )
+        else:
+            logger.warning("No recognized date column found in terrorism data")
+            terrorism_df = terrorism_df.withColumn("terrorism_date", lit(None).cast("date"))
+        
+        # Extract year, month, day for partitioning and joining
+        # Check if columns exist (case-insensitive)
+        col_names_lower = [c.lower() for c in terrorism_df.columns]
+        has_iyear = "iyear" in col_names_lower
+        has_imonth = "imonth" in col_names_lower
+        has_iday = "iday" in col_names_lower
+        
+        # Get actual column names (case-sensitive)
+        iyear_col = next((c for c in terrorism_df.columns if c.lower() == "iyear"), None)
+        imonth_col = next((c for c in terrorism_df.columns if c.lower() == "imonth"), None)
+        iday_col = next((c for c in terrorism_df.columns if c.lower() == "iday"), None)
+        
+        # Extract Year - prefer terrorism_date, fallback to iyear
+        if "terrorism_date" in terrorism_df.columns:
+            if has_iyear and iyear_col:
+                year_expr = when(
+                    col("terrorism_date").isNotNull(),
+                    col("terrorism_date").cast("string").substr(1, 4).cast(IntegerType())
+                ).otherwise(col(iyear_col))
+            else:
+                year_expr = col("terrorism_date").cast("string").substr(1, 4).cast(IntegerType())
+        elif has_iyear and iyear_col:
+            year_expr = col(iyear_col)
+        else:
+            year_expr = lit(None).cast(IntegerType())
+        
+        # Extract Month - prefer terrorism_date, fallback to imonth
+        if "terrorism_date" in terrorism_df.columns:
+            if has_imonth and imonth_col:
+                month_expr = when(
+                    col("terrorism_date").isNotNull(),
+                    col("terrorism_date").cast("string").substr(6, 2).cast(IntegerType())
+                ).otherwise(
+                    when(col(imonth_col) == 0, lit(1)).otherwise(col(imonth_col))
+                )
+            else:
+                month_expr = col("terrorism_date").cast("string").substr(6, 2).cast(IntegerType())
+        elif has_imonth and imonth_col:
+            month_expr = when(col(imonth_col) == 0, lit(1)).otherwise(col(imonth_col))
+        else:
+            month_expr = lit(None).cast(IntegerType())
+        
+        # Extract Day - prefer terrorism_date, fallback to iday
+        if "terrorism_date" in terrorism_df.columns:
+            if has_iday and iday_col:
+                day_expr = when(
+                    col("terrorism_date").isNotNull(),
+                    col("terrorism_date").cast("string").substr(9, 2).cast(IntegerType())
+                ).otherwise(
+                    when(col(iday_col) == 0, lit(1)).otherwise(col(iday_col))
+                )
+            else:
+                day_expr = col("terrorism_date").cast("string").substr(9, 2).cast(IntegerType())
+        elif has_iday and iday_col:
+            day_expr = when(col(iday_col) == 0, lit(1)).otherwise(col(iday_col))
+        else:
+            day_expr = lit(None).cast(IntegerType())
+        
+        terrorism_df = terrorism_df.withColumn("Year", year_expr) \
+                                   .withColumn("Month", month_expr) \
+                                   .withColumn("Day", day_expr)
+        
+        # Extract or create airport code from city/state
+        # Try to match city names to airport codes (simplified mapping)
+        if "city" in terrorism_df.columns or "city_txt" in terrorism_df.columns:
+            city_col = col("city") if "city" in terrorism_df.columns else col("city_txt")
+            # This is a simplified approach - in production, you'd have a city-to-airport mapping table
+            terrorism_df = terrorism_df.withColumn(
+                "airport_code",
+                lit(None).cast(StringType())  # Placeholder - would need city-to-airport mapping
+            )
+        else:
+            terrorism_df = terrorism_df.withColumn("airport_code", lit(None).cast(StringType()))
+        
+        # Create severity categories based on fatalities
+        if "fatalities" in terrorism_df.columns or "nkill" in terrorism_df.columns:
+            fatalities_col = col("fatalities") if "fatalities" in terrorism_df.columns else col("nkill")
+            terrorism_df = terrorism_df.withColumn(
+                "severity_category",
+                when(coalesce(fatalities_col, lit(0)) > 10, lit("high"))
+                .when(coalesce(fatalities_col, lit(0)) > 0, lit("medium"))
+                .otherwise(lit("low"))
+            ).withColumn(
+                "fatalities_count",
+                coalesce(fatalities_col, lit(0))
+            )
+        else:
+            terrorism_df = terrorism_df.withColumn("severity_category", lit("unknown")) \
+                                      .withColumn("fatalities_count", lit(0))
+        
+        # Create impact score (0-10 scale)
+        terrorism_df = terrorism_df.withColumn(
+            "terrorism_impact_score",
+            when(col("severity_category") == "high", lit(9))
+            .when(col("severity_category") == "medium", lit(6))
+            .when(col("severity_category") == "low", lit(3))
+            .otherwise(lit(1))
+        )
+        
+        # Flag for major events (high severity)
+        terrorism_df = terrorism_df.withColumn(
+            "major_event_flag",
+            when(col("severity_category") == "high", lit(1)).otherwise(lit(0))
+        )
+        
+        # Extract country/region if available
+        if "country" in terrorism_df.columns or "country_txt" in terrorism_df.columns:
+            country_col = col("country") if "country" in terrorism_df.columns else col("country_txt")
+            terrorism_df = terrorism_df.withColumn("country", country_col)
+        else:
+            terrorism_df = terrorism_df.withColumn("country", lit(None).cast(StringType()))
+        
+        # US-specific flag (for filtering US domestic flights)
+        terrorism_df = terrorism_df.withColumn(
+            "is_us_event",
+            when(
+                (col("country").isNotNull()) & 
+                (lower(col("country")).rlike("united states|usa|us")),
+                lit(1)
+            ).otherwise(lit(0))
+        )
+        
+        # Add feature engineering metadata
+        terrorism_df = terrorism_df.withColumn("feature_eng_timestamp", current_timestamp()) \
+                                   .withColumn("target_layer", lit("gold"))
+        
+        logger.info("Terrorism features engineered successfully")
+        
+        # Log statistics
+        if terrorism_df.count() > 0:
+            severity_stats = terrorism_df.groupBy("severity_category").agg(
+                count("*").alias("count")
+            ).collect()
+            logger.info("Terrorism Severity Category Distribution:")
+            for row in severity_stats:
+                logger.info(f"  {row['severity_category']}: {row['count']} events")
+            
+            us_events = terrorism_df.filter(col("is_us_event") == 1).count()
+            logger.info(f"US events: {us_events}")
+        
+        return terrorism_df
+        
+    except Exception as e:
+        error_msg = f"Error engineering terrorism features: {str(e)}"
+        logger.error(error_msg)
+        return None
+
 def create_weather_correlation_features(df):
     """
     Generate weather correlation features (placeholder for future weather data).
+    This function is kept for backward compatibility but weather is now processed separately.
     """
-    logger.info("Creating weather correlation features (placeholder)")
+    logger.info("Creating weather correlation features (placeholder - weather processed separately)")
     
     try:
-        # Placeholder for weather features
-        # In production, this would join with actual weather data
+        # Placeholder columns - actual weather data will be joined in Athena queries
         df = df.withColumn("weather_delay_correlation", lit(None).cast(DoubleType())) \
                .withColumn("temperature_impact", lit(None).cast(DoubleType())) \
                .withColumn("precipitation_impact", lit(None).cast(DoubleType()))
         
-        logger.info("Weather correlation features created (placeholders)")
+        logger.info("Weather correlation features created (placeholders - join in Athena)")
         return df
         
     except Exception as e:
@@ -1157,6 +1547,48 @@ try:
             "reliability_metrics",
             partition_cols=["Year", "Month", "flight_hour"]
         )
+    
+    # ============================================================================
+    # Process Supplemental Data Separately (Weather & Terrorism)
+    # ============================================================================
+    
+    logger.info("=" * 80)
+    logger.info("Processing Supplemental Data: Weather & Terrorism")
+    logger.info("=" * 80)
+    
+    # Process weather data separately
+    weather_df = read_silver_weather_data()
+    if weather_df is not None:
+        weather_df = engineer_weather_features(weather_df)
+        if weather_df is not None:
+            # Write weather features to Gold with partitioning
+            write_to_gold(
+                weather_df,
+                "weather_features",
+                partition_cols=["Year", "Month", "airport_code"]
+            )
+            logger.info("Weather features written to Gold bucket")
+        else:
+            logger.warning("Weather feature engineering returned None, skipping write")
+    else:
+        logger.info("No weather data to process")
+    
+    # Process terrorism data separately
+    terrorism_df = read_silver_terrorism_data()
+    if terrorism_df is not None:
+        terrorism_df = engineer_terrorism_features(terrorism_df)
+        if terrorism_df is not None:
+            # Write terrorism features to Gold with partitioning
+            write_to_gold(
+                terrorism_df,
+                "terrorism_features",
+                partition_cols=["Year", "Month"]
+            )
+            logger.info("Terrorism features written to Gold bucket")
+        else:
+            logger.warning("Terrorism feature engineering returned None, skipping write")
+    else:
+        logger.info("No terrorism data to process")
     
     logger.info("=" * 80)
     logger.info("Feature Engineering Job Completed Successfully")
