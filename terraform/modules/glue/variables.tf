@@ -68,3 +68,18 @@ variable "tags" {
   default     = {}
 }
 
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+}
+
+variable "aws_account_id" {
+  description = "AWS account ID"
+  type        = string
+}
+
+variable "scraped_processor_lambda_arn" {
+  description = "ARN of the Lambda function for processing scraped data"
+  type        = string
+}
+

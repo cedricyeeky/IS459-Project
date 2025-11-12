@@ -5,52 +5,54 @@
 # Note: Python implementation scripts are NOT included (to be implemented later)
 
 # ----------------------------------------------------------------------------
-# Lambda Function
+# Lambda Functions
+# ----------------------------------------------------------------------------
+# NOTE: Wikipedia scraper Lambda removed - not implemented
+# Only the scraped_processor Lambda (container-based) is active
+
+# ----------------------------------------------------------------------------
+# Scraped Data Processor Lambda Function
 # ----------------------------------------------------------------------------
 
-# Create a placeholder Lambda deployment package
-# In production, this would contain the actual scraper.py implementation
-data "archive_file" "lambda_placeholder" {
-  type        = "zip"
-  output_path = "${path.module}/lambda_function.zip"
-
-  source {
-    content  = "# Placeholder - implement scraper.py\nprint('Lambda function not yet implemented')"
-    filename = "lambda_function.py"
-  }
-}
-
-resource "aws_lambda_function" "scraper" {
-  filename         = data.archive_file.lambda_placeholder.output_path
-  function_name    = "${var.resource_prefix}-wikipedia-scraper"
-  role             = var.lambda_role_arn
-  handler          = "scraper.lambda_handler"
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
-  runtime          = "python3.11"
-  timeout          = var.lambda_timeout
-  memory_size      = var.lambda_memory_size
+# Lambda function using container image from ECR
+resource "aws_lambda_function" "scraped_processor" {
+  function_name = "${var.resource_prefix}-scraped-processor"
+  role          = var.lambda_role_arn
+  package_type  = "Image"
+  image_uri     = "${var.ecr_repository_url}:latest"
+  timeout       = 300  # 5 minutes
+  memory_size   = 1024  # 1 GB for pandas processing
 
   environment {
     variables = {
-      RAW_BUCKET_NAME = var.raw_bucket_name
-      DLQ_BUCKET_NAME = var.dlq_bucket_name
-      WIKIPEDIA_URLS  = jsonencode(var.wikipedia_urls)
+      RAW_BUCKET    = var.raw_bucket_name
+      SILVER_BUCKET = var.silver_bucket_name
+      DLQ_BUCKET    = var.dlq_bucket_name
     }
   }
 
   tags = merge(
     var.tags,
     {
-      Name = "${var.resource_prefix}-wikipedia-scraper"
+      Name = "${var.resource_prefix}-scraped-processor"
     }
   )
 }
 
-# CloudWatch Log Group for Lambda
-resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${aws_lambda_function.scraper.function_name}"
+# CloudWatch Log Group for Scraped Processor Lambda
+resource "aws_cloudwatch_log_group" "scraped_processor" {
+  name              = "/aws/lambda/${aws_lambda_function.scraped_processor.function_name}"
   retention_in_days = 14
 
   tags = var.tags
+}
+
+# Lambda permission to allow EventBridge to invoke
+resource "aws_lambda_permission" "allow_eventbridge_scraped" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.scraped_processor.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = var.eventbridge_rule_arn
 }
 

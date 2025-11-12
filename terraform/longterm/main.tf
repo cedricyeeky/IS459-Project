@@ -170,9 +170,9 @@ resource "aws_ecr_lifecycle_policy" "scraper" {
   })
 }
 
-# Compute module (ECS, ALB) - Mock API
+# Mock API ECS module (ECS, ALB, Mock API service)
 module "compute" {
-  source = "./compute"
+  source = "../modules/mock_api_ecs"
 
   project_name       = var.project_name
   environment        = var.environment
@@ -195,7 +195,7 @@ module "compute" {
 
 # Scraper module (EventBridge scheduled ECS task)
 module "scraper" {
-  source = "./scraper"
+  source = "../modules/scraper_ecs"
 
   project_name       = var.project_name
   environment        = var.environment

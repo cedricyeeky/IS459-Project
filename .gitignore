@@ -90,3 +90,6 @@ Thumbs.db
 *.bak
 *.backup
 
+
+# Lambda layers (not used - using container images instead)
+terraform/modules/lambda/layer/

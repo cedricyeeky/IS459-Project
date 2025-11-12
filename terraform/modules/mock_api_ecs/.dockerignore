@@ -1,14 +1,15 @@
 # Python
-__pycache__
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-venv/
 env/
-ENV/
+venv/
+.venv/
+.env
 
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
@@ -20,19 +21,17 @@ ENV/
 Thumbs.db
 
 # Documentation
-README.md
+docs/
 *.md
+!README.md
+
+# Testing
+test_*.py
+*.test.py
 
 # Git
 .git/
 .gitignore
 
 # Docker
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Environment
-.env
-.env.local
-.env.*.local
+docker-compose*.yml

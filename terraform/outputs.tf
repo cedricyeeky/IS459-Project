@@ -49,16 +49,7 @@ output "dlq_bucket_arn" {
 # ----------------------------------------------------------------------------
 # Lambda Outputs
 # ----------------------------------------------------------------------------
-
-output "lambda_function_name" {
-  description = "Name of the Wikipedia scraper Lambda function"
-  value       = module.lambda.lambda_function_name
-}
-
-output "lambda_function_arn" {
-  description = "ARN of the Wikipedia scraper Lambda function"
-  value       = module.lambda.lambda_function_arn
-}
+# NOTE: Wikipedia scraper Lambda outputs removed - function removed
 
 # ----------------------------------------------------------------------------
 # Glue Outputs
@@ -108,10 +99,7 @@ output "sns_topic_arn" {
   value       = module.notifications.dlq_sns_topic_arn
 }
 
-output "lambda_schedule_arn" {
-  description = "ARN of the Lambda EventBridge schedule"
-  value       = module.notifications.lambda_schedule_arn
-}
+# NOTE: lambda_schedule_arn removed - Wikipedia Lambda schedule removed
 
 output "cleaning_schedule_arn" {
   description = "ARN of the Glue cleaning job EventBridge schedule"
@@ -202,5 +190,114 @@ output "deployment_summary" {
     resource_prefix = "${var.resource_prefix}-${var.environment}"
     alert_email     = var.alert_email
   }
+}
+
+# ----------------------------------------------------------------------------
+# Network Outputs (Mock API / Scraper ECS)
+# ----------------------------------------------------------------------------
+
+output "vpc_id" {
+  description = "VPC ID"
+  value       = var.vpc_id != "" ? var.vpc_id : module.vpc[0].vpc_id
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs"
+  value       = var.vpc_id != "" ? data.aws_subnets.private[0].ids : module.vpc[0].private_subnets
+}
+
+output "public_subnet_ids" {
+  description = "Public subnet IDs"
+  value       = var.vpc_id != "" ? data.aws_subnets.public[0].ids : module.vpc[0].public_subnets
+}
+
+# ----------------------------------------------------------------------------
+# ECR Outputs
+# ----------------------------------------------------------------------------
+
+output "mock_api_ecr_repository_url" {
+  description = "ECR repository URL for mock API"
+  value       = aws_ecr_repository.mock_api.repository_url
+}
+
+output "scraper_ecr_repository_url" {
+  description = "ECR repository URL for scraper"
+  value       = aws_ecr_repository.scraper.repository_url
+}
+
+# ----------------------------------------------------------------------------
+# ECS Outputs
+# ----------------------------------------------------------------------------
+
+output "ecs_cluster_id" {
+  description = "ECS Cluster ID"
+  value       = module.mock_api_ecs.ecs_cluster_id
+}
+
+output "ecs_cluster_name" {
+  description = "ECS Cluster name"
+  value       = module.mock_api_ecs.ecs_cluster_name
+}
+
+output "mock_api_service_name" {
+  description = "Mock API ECS Service name"
+  value       = module.mock_api_ecs.mock_api_service_name
+}
+
+# ----------------------------------------------------------------------------
+# Load Balancer Outputs
+# ----------------------------------------------------------------------------
+
+output "alb_dns_name" {
+  description = "Application Load Balancer DNS name"
+  value       = module.mock_api_ecs.alb_dns_name
+}
+
+output "alb_url" {
+  description = "Full URL to access the Mock API"
+  value       = module.mock_api_ecs.alb_url
+}
+
+output "mock_api_endpoint" {
+  description = "Mock API endpoint for realtime flights"
+  value       = module.mock_api_ecs.mock_api_endpoint
+}
+
+output "alb_zone_id" {
+  description = "ALB Zone ID for Route53 alias records"
+  value       = module.mock_api_ecs.alb_zone_id
+}
+
+# ----------------------------------------------------------------------------
+# CloudWatch Log Groups
+# ----------------------------------------------------------------------------
+
+output "mock_api_log_group" {
+  description = "CloudWatch Log Group for Mock API"
+  value       = module.mock_api_ecs.mock_api_log_group
+}
+
+output "scraper_log_group" {
+  description = "CloudWatch Log Group for Scraper"
+  value       = module.scraper_ecs.scraper_log_group_name
+}
+
+# ----------------------------------------------------------------------------
+# Scraper Outputs
+# ----------------------------------------------------------------------------
+
+output "scraper_task_definition_arn" {
+  description = "ARN of the scraper ECS task definition"
+  value       = module.scraper_ecs.scraper_task_definition_arn
+}
+
+output "eventbridge_rule_name" {
+  description = "Name of the EventBridge rule for scraper"
+  value       = module.scraper_ecs.eventbridge_rule_name
+}
+
+output "scraper_schedule" {
+  description = "Schedule expression for the scraper"
+  value       = module.scraper_ecs.scraper_schedule
 }
 

@@ -22,3 +22,13 @@ output "glue_role_name" {
   value       = aws_iam_role.glue.name
 }
 
+output "eventbridge_role_arn" {
+  description = "ARN of the EventBridge role"
+  value       = aws_iam_role.eventbridge.arn
+}
+
+output "eventbridge_role_name" {
+  description = "Name of the EventBridge role"
+  value       = aws_iam_role.eventbridge.name
+}
+

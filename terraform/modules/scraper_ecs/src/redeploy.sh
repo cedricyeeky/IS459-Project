@@ -1,6 +1,6 @@
 #!/bin/bash
 # Redeploy scraper with updated S3 path structure
-# Run this from the scraper/ directory
+# Run this from the terraform/modules/scraper_ecs/src/ directory
 
 set -e
 
@@ -8,9 +8,9 @@ echo "=========================================="
 echo "Redeploying Scraper with Flat S3 Structure"
 echo "=========================================="
 
-# Check if we're in the scraper directory
+# Check if we're in the scraper src directory
 if [ ! -f "app.py" ]; then
-    echo "Error: Must run from scraper/ directory"
+    echo "Error: Must run from terraform/modules/scraper_ecs/src/ directory"
     exit 1
 fi
 
@@ -56,7 +56,7 @@ echo ""
 
 # Step 5: Force new ECS task deployment
 echo "Step 5: Forcing new ECS task deployment..."
-cd ../terraform/longterm
+cd ../../../../longterm
 
 # Get ECS cluster and service names from Terraform
 ECS_CLUSTER=$(terraform output -raw ecs_cluster_name 2>/dev/null || echo "flight-mock-api-prod-cluster")

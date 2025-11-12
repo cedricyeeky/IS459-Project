@@ -329,14 +329,14 @@ def process_supplemental_data():
     logger.info("Processing supplemental data")
     
     results = {}
-    
+
     # ============================================================================
     # Process Weather Data from supplemental/weather/
     # ============================================================================
     try:
         weather_path = f"s3://{RAW_BUCKET}/supplemental/weather/"
         logger.info(f"Reading weather data from {weather_path}")
-        
+
         weather_df = spark.read \
             .option("header", "true") \
             .option("inferSchema", "true") \
@@ -344,7 +344,7 @@ def process_supplemental_data():
         
         weather_count = weather_df.count()
         logger.info(f"Read {weather_count} records from weather data")
-        
+
         if weather_count > 0:
             # Weather data deduplication using obs_id and valid_time_gmt
             if "obs_id" in weather_df.columns and "valid_time_gmt" in weather_df.columns:
@@ -353,36 +353,36 @@ def process_supplemental_data():
             else:
                 logger.warning("Weather data missing obs_id or valid_time_gmt columns, using generic deduplication")
                 weather_df = deduplicate_data(weather_df)
-            
+
             # Add processing metadata
             weather_df = weather_df.withColumn("processing_timestamp", current_timestamp()) \
                                    .withColumn("source_layer", lit("raw")) \
                                    .withColumn("data_source", lit("supplemental")) \
                                    .withColumn("data_type", lit("weather"))
-            
+
             results['weather'] = weather_df
             logger.info(f"Weather data processing complete: {weather_count} records")
         else:
             logger.info("No weather data found")
-            
+
     except Exception as e:
         logger.warning(f"Error processing weather data (may not exist): {str(e)}")
-    
+
     # ============================================================================
     # Process Terrorism/Security Data from supplemental/security/
     # ============================================================================
     try:
         security_path = f"s3://{RAW_BUCKET}/supplemental/security/"
         logger.info(f"Reading terrorism data from {security_path}")
-        
+
         terrorism_df = spark.read \
             .option("header", "true") \
             .option("inferSchema", "true") \
             .csv(security_path)
-        
+
         terrorism_count = terrorism_df.count()
         logger.info(f"Read {terrorism_count} records from terrorism data")
-        
+
         if terrorism_count > 0:
             # Terrorism data deduplication - use date columns if available
             dedup_cols = []
@@ -396,7 +396,7 @@ def process_supplemental_data():
             elif "date" in terrorism_df.columns:
                 dedup_cols = ["date", "location"]
                 logger.info("Detected date format")
-            
+
             if dedup_cols:
                 # Filter to only existing columns
                 existing_dedup_cols = [c for c in dedup_cols if c in terrorism_df.columns]
@@ -409,21 +409,21 @@ def process_supplemental_data():
             else:
                 terrorism_df = deduplicate_data(terrorism_df)
                 logger.info("Using generic deduplication for terrorism data")
-            
+
             # Add processing metadata
             terrorism_df = terrorism_df.withColumn("processing_timestamp", current_timestamp()) \
                                       .withColumn("source_layer", lit("raw")) \
                                       .withColumn("data_source", lit("supplemental")) \
                                       .withColumn("data_type", lit("terrorism"))
-            
+
             results['terrorism'] = terrorism_df
             logger.info(f"Terrorism data processing complete: {terrorism_count} records")
         else:
             logger.info("No terrorism data found")
-            
+
     except Exception as e:
         logger.warning(f"Error processing terrorism data (may not exist): {str(e)}")
-    
+
     # ============================================================================
     # Process Other Supplemental Data from root supplemental/ directory
     # (plane data, FAA enplanements, etc.)
@@ -431,30 +431,30 @@ def process_supplemental_data():
     try:
         supplemental_path = f"s3://{RAW_BUCKET}/supplemental/"
         logger.info(f"Reading other supplemental data from {supplemental_path}")
-        
+
         # Read all files from supplemental/ directory
         other_df = spark.read \
             .option("header", "true") \
             .option("inferSchema", "true") \
             .csv(supplemental_path)
-        
+
         # Add file path column to filter out subdirectories
         other_df = other_df.withColumn("file_path", input_file_name())
-        
+
         # Filter out files from weather/ and security/ subdirectories
         other_df = other_df.filter(
-            ~col("file_path").contains("/weather/") & 
+            ~col("file_path").contains("/weather/") &
             ~col("file_path").contains("/security/")
         )
-        
+
         other_count = other_df.count()
-        
+
         if other_count > 0:
             logger.info(f"Read {other_count} records from other supplemental data")
-            
+
             # Remove the file_path column after filtering
             other_df = other_df.drop("file_path")
-            
+
             # Detect data type and deduplicate accordingly
             if "tailnum" in other_df.columns or "TailNum" in other_df.columns:
                 # Plane data
@@ -464,33 +464,33 @@ def process_supplemental_data():
                 # Generic supplemental data - deduplicate across all columns
                 logger.info("Using generic deduplication for other supplemental data")
                 other_df = deduplicate_data(other_df)
-            
+
             # Add processing metadata
             other_df = other_df.withColumn("processing_timestamp", current_timestamp()) \
                                .withColumn("source_layer", lit("raw")) \
                                .withColumn("data_source", lit("supplemental")) \
                                .withColumn("data_type", lit("other"))
-            
+
             results['supplemental'] = other_df
             logger.info(f"Other supplemental data processing complete: {other_count} records")
         else:
             logger.info("No other supplemental data found in root supplemental/ directory")
-            
+
     except Exception as e:
         logger.warning(f"Error processing other supplemental data (may not exist): {str(e)}")
-    
+
     # ============================================================================
     # Return results dictionary
     # ============================================================================
     if results:
         total_records = sum([df.count() for df in results.values()])
         logger.info(f"Supplemental data processing complete: {total_records} total records")
-        
+
         # Log breakdown by data type
         for data_type, df in results.items():
             count = df.count()
             logger.info(f"  - {data_type}: {count} records")
-        
+
         return results
     else:
         logger.warning("No supplemental data processed")
@@ -506,7 +506,7 @@ def process_supplemental_data():
 def write_to_silver(df, partition_cols=None, subdirectory=None):
     """
     Write cleaned data to Silver bucket in Parquet format.
-    
+
     Args:
         df: DataFrame to write
         partition_cols: List of columns to partition by
@@ -520,9 +520,9 @@ def write_to_silver(df, partition_cols=None, subdirectory=None):
             logger.info(f"Writing to subdirectory: {subdirectory}")
         else:
             silver_path = f"s3://{SILVER_BUCKET}/"
-        
+
         record_count = df.count()
-        
+
         if partition_cols:
             df.write \
                 .mode("append") \
@@ -532,7 +532,7 @@ def write_to_silver(df, partition_cols=None, subdirectory=None):
             df.write \
                 .mode("append") \
                 .parquet(silver_path)
-        
+
         logger.info(f"Successfully wrote {record_count} records to Silver bucket: {silver_path}")
         
     except Exception as e:
@@ -564,16 +564,16 @@ try:
     else:
         logger.warning("Historical data processing returned None - check logs above for errors")
         logger.warning("Possible causes: schema validation failed, no data in s3://{}/historical/, or processing error".format(RAW_BUCKET))
-    
+
     # ============================================================================
     # Process Supplemental Data (Weather, Terrorism, Other)
     # ============================================================================
     logger.info("Processing supplemental data...")
     supplemental_results = process_supplemental_data()
-    
+
     if supplemental_results:
         logger.info(f"Supplemental data processing returned {len(supplemental_results)} data types")
-        
+
         # Write weather data to weather/ subdirectory
         if 'weather' in supplemental_results:
             weather_count = supplemental_results['weather'].count()
@@ -582,7 +582,7 @@ try:
             logger.info("Weather data written successfully to s3://{}/weather/".format(SILVER_BUCKET))
         else:
             logger.info("No weather data to write (may not exist in raw bucket)")
-        
+
         # Write terrorism data to terrorism/ subdirectory
         if 'terrorism' in supplemental_results:
             terrorism_count = supplemental_results['terrorism'].count()
@@ -591,7 +591,7 @@ try:
             logger.info("Terrorism data written successfully to s3://{}/terrorism/".format(SILVER_BUCKET))
         else:
             logger.info("No terrorism data to write (may not exist in raw bucket)")
-        
+
         # Write other supplemental data to supplemental/ subdirectory
         if 'supplemental' in supplemental_results:
             other_count = supplemental_results['supplemental'].count()
@@ -603,7 +603,7 @@ try:
     else:
         logger.warning("No supplemental data processed - check if data exists in s3://{}/supplemental/".format(RAW_BUCKET))
         logger.warning("Expected paths: s3://{}/supplemental/weather/ and s3://{}/supplemental/security/".format(RAW_BUCKET, RAW_BUCKET))
-    
+
     # ============================================================================
     # Scraped/Realtime Data Processing - REMOVED
     # ============================================================================

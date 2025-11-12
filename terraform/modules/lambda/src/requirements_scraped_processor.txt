@@ -1,0 +1,10 @@
+# Lambda Dependencies for Scraped Data Processor
+# ===============================================
+# These packages will be included in a Lambda Layer
+
+# Data processing
+pandas==2.0.3
+pyarrow==12.0.1
+
+# AWS SDK (pre-installed but specified for version)
+boto3==1.28.85
