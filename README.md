@@ -1180,31 +1180,12 @@ aws s3 rm s3://${GOLD_BUCKET}/ --recursive
 7. **Enable MFA**: For AWS Console access
 8. **Review security groups**: If using VPC for Lambda
 
-## Future Enhancements
-
-- [ ] Implement Lambda scraper Python code (`scraper.py`)
-- [ ] Add real-time streaming with Kinesis
-- [ ] Integrate with QuickSight for dashboards
-- [ ] Add data quality metrics to CloudWatch
-- [ ] Implement data lineage tracking
-- [ ] Add unit tests for Glue scripts
-- [ ] Create CI/CD pipeline with GitHub Actions
-- [x] Add Athena queries for Gold layer analysis (BQ1 & BQ2 queries implemented)
-- [ ] Set up real-time data tables (realtime_flights, realtime_weather) in Glue Catalog
-- [ ] Integrate with QuickSight for visualization dashboards
-- [ ] Implement incremental processing with job bookmarks
-- [ ] Add data validation with Great Expectations
-
 ## Support and Contributing
 
 For issues, questions, or contributions:
 1. Open an issue in the repository
 2. Submit a pull request with improvements
 3. Contact the maintainers
-
-## License
-
-[Your License Here]
 
 ## Acknowledgments
 
