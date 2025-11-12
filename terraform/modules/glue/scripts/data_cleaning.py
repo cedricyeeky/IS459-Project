@@ -372,134 +372,6 @@ def process_supplemental_data():
         logger.error(f"Error processing supplemental data: {str(e)}")
         return None
 
-def process_scraped_data():
-    """
-    Process scraped data from Mock API (weather and flights in JSON format).
-    Returns a list of tuples: (dataframe, source_filename)
-    """
-    logger.info("Processing scraped data")
-    
-    try:
-        # Process weather data
-        weather_path = f"s3://{RAW_BUCKET}/scraped/weather/"
-        flights_path = f"s3://{RAW_BUCKET}/scraped/flights/"
-        
-        all_data_frames = []
-        
-        # Try to read weather JSON files
-        try:
-            logger.info(f"Reading weather data from {weather_path}")
-            
-            # List all JSON files in the weather directory
-            import boto3
-            s3_client = boto3.client('s3')
-            weather_files = []
-            paginator = s3_client.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=RAW_BUCKET, Prefix='scraped/weather/'):
-                if 'Contents' in page:
-                    weather_files.extend([obj['Key'] for obj in page['Contents'] if obj['Key'].endswith('.json')])
-            
-            logger.info(f"Found {len(weather_files)} weather JSON files")
-            
-            for file_key in weather_files:
-                file_path = f"s3://{RAW_BUCKET}/{file_key}"
-                # Extract filename without extension
-                filename = file_key.split('/')[-1].replace('.json', '')
-                
-                logger.info(f"Processing weather file: {filename}")
-                weather_df = spark.read \
-                    .option("multiLine", "true") \
-                    .json(file_path)
-                
-                if weather_df.count() > 0:
-                    # Extract observations array if it exists (from the metadata structure)
-                    if "observations" in weather_df.columns:
-                        from pyspark.sql.functions import explode
-                        weather_df = weather_df.select(explode(col("observations")).alias("observation"))
-                        weather_df = weather_df.select("observation.*")
-                        logger.info(f"Exploded observations: {weather_df.count()} records")
-                    
-                    # Deduplicate weather data using obs_id if available
-                    if "obs_id" in weather_df.columns:
-                        weather_df = deduplicate_data(weather_df, ["obs_id"])
-                    else:
-                        weather_df = deduplicate_data(weather_df)
-                    
-                    # Add processing metadata
-                    weather_df = weather_df.withColumn("processing_timestamp", current_timestamp()) \
-                               .withColumn("source_layer", lit("raw")) \
-                               .withColumn("data_source", lit("scraped_weather")) \
-                               .withColumn("source_file", lit(filename))
-                    
-                    all_data_frames.append((weather_df, f"scraped/weather/{filename}_cleaned"))
-                    logger.info(f"Processed {weather_df.count()} weather records from {filename}")
-        except Exception as e:
-            logger.warning(f"No weather data found or error processing: {str(e)}")
-        
-        # Try to read flights JSON files
-        try:
-            logger.info(f"Reading flights data from {flights_path}")
-            
-            # List all JSON files in the flights directory
-            import boto3
-            s3_client = boto3.client('s3')
-            flights_files = []
-            paginator = s3_client.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=RAW_BUCKET, Prefix='scraped/flights/'):
-                if 'Contents' in page:
-                    flights_files.extend([obj['Key'] for obj in page['Contents'] if obj['Key'].endswith('.json')])
-            
-            logger.info(f"Found {len(flights_files)} flights JSON files")
-            
-            for file_key in flights_files:
-                file_path = f"s3://{RAW_BUCKET}/{file_key}"
-                # Extract filename without extension
-                filename = file_key.split('/')[-1].replace('.json', '')
-                
-                logger.info(f"Processing flights file: {filename}")
-                flights_df = spark.read \
-                    .option("multiLine", "true") \
-                    .json(file_path)
-                
-                if flights_df.count() > 0:
-                    # Extract flights array if it exists (from the metadata structure)
-                    if "flights" in flights_df.columns:
-                        from pyspark.sql.functions import explode
-                        flights_df = flights_df.select(explode(col("flights")).alias("flight"))
-                        flights_df = flights_df.select("flight.*")
-                        logger.info(f"Exploded flights: {flights_df.count()} records")
-                    
-                    # Deduplicate flights data
-                    if "flight_id" in flights_df.columns:
-                        flights_df = deduplicate_data(flights_df, ["flight_id"])
-                    elif all(col_name in flights_df.columns for col_name in ["flight_number", "scheduled_departure", "origin"]):
-                        flights_df = deduplicate_data(flights_df, ["flight_number", "scheduled_departure", "origin"])
-                    else:
-                        flights_df = deduplicate_data(flights_df)
-                    
-                    # Add processing metadata
-                    flights_df = flights_df.withColumn("processing_timestamp", current_timestamp()) \
-                               .withColumn("source_layer", lit("raw")) \
-                               .withColumn("data_source", lit("scraped_flights")) \
-                               .withColumn("source_file", lit(filename))
-                    
-                    all_data_frames.append((flights_df, f"scraped/flights/{filename}_cleaned"))
-                    logger.info(f"Processed {flights_df.count()} flight records from {filename}")
-        except Exception as e:
-            logger.warning(f"No flights data found or error processing: {str(e)}")
-        
-        # Return all scraped data with filenames
-        if len(all_data_frames) == 0:
-            logger.warning("No scraped data found")
-            return None
-        else:
-            logger.info(f"Processed {len(all_data_frames)} scraped datasets")
-            return all_data_frames
-        
-    except Exception as e:
-        logger.error(f"Error processing scraped data: {str(e)}")
-        return None
-
 def write_to_silver(df, partition_cols=None, output_name=None):
     """
     Write cleaned data to Silver bucket in Parquet format.
@@ -562,24 +434,9 @@ try:
     if supplemental_df is not None:
         write_to_silver(supplemental_df)
     
-    # Process scraped data
-    scraped_result = process_scraped_data()
-    if scraped_result is not None:
-        if isinstance(scraped_result, list):
-            # Multiple dataframes with filenames (e.g., weather and flights separate)
-            for df_tuple in scraped_result:
-                if isinstance(df_tuple, tuple) and len(df_tuple) == 2:
-                    df, output_name = df_tuple
-                    logger.info(f"Writing scraped dataset '{output_name}' to Silver bucket")
-                    write_to_silver(df, output_name=output_name)
-                else:
-                    # Fallback for backwards compatibility
-                    logger.info(f"Writing scraped dataset to Silver bucket")
-                    write_to_silver(df_tuple)
-        else:
-            # Single dataframe (backwards compatibility)
-            write_to_silver(scraped_result)
-    
+    # NOTE: Scraped data processing removed - now handled by Lambda scraped-processor
+    # Lambda processes scraped JSON files in real-time and writes to Silver bucket
+
     logger.info("=" * 80)
     logger.info("Data Cleaning Job Completed Successfully")
     logger.info("=" * 80)
