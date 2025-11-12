@@ -127,9 +127,6 @@ module "lambda" {
   silver_bucket_name = module.s3.silver_bucket_name
   dlq_bucket_name    = module.s3.dlq_bucket_name
 
-  # EventBridge rule ARN for scraped processor (will be created by Glue module)
-  eventbridge_rule_arn = module.glue.scraped_data_trigger_rule_arn
-
   tags = local.common_tags
 }
 
