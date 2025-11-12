@@ -2,13 +2,13 @@
 
 ## Overview
 
-The Athena queries integrate real-time data from your mock API with historical Gold layer data. This document explains how to set up the real-time data tables in AWS Glue Data Catalog.
+The Athena queries integrate real-time data from your API with historical Gold layer data. This document explains how to set up the real-time data tables in AWS Glue Data Catalog.
 
 ## Required Tables
 
 ### 1. `realtime_flights` Table
 
-This table should contain flight data from your mock API with the following schema:
+This table should contain flight data from your API with the following schema:
 
 ```sql
 CREATE EXTERNAL TABLE realtime_flights (
@@ -117,9 +117,9 @@ TBLPROPERTIES (
 
 Use the `CREATE EXTERNAL TABLE` statements above in Athena Query Editor.
 
-## Data Ingestion from Mock API
+## Data Ingestion from API
 
-Your mock API should write data in the following format:
+Your API should write data in the following format:
 
 ### Flight Data JSON Example:
 ```json
