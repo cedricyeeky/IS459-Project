@@ -1,19 +1,15 @@
 # ============================================================================
 # Lambda Module - Outputs
 # ============================================================================
+# NOTE: Wikipedia scraper outputs removed - function removed
 
-output "lambda_function_name" {
-  description = "Name of the Lambda function"
-  value       = aws_lambda_function.scraper.function_name
+output "scraped_processor_function_name" {
+  description = "Name of the scraped data processor Lambda function"
+  value       = aws_lambda_function.scraped_processor.function_name
 }
 
-output "lambda_function_arn" {
-  description = "ARN of the Lambda function"
-  value       = aws_lambda_function.scraper.arn
-}
-
-output "lambda_function_invoke_arn" {
-  description = "Invoke ARN of the Lambda function"
-  value       = aws_lambda_function.scraper.invoke_arn
+output "scraped_processor_function_arn" {
+  description = "ARN of the scraped data processor Lambda function"
+  value       = aws_lambda_function.scraped_processor.arn
 }
 

@@ -7,10 +7,7 @@ output "dlq_sns_topic_arn" {
   value       = aws_sns_topic.dlq_alerts.arn
 }
 
-output "lambda_schedule_arn" {
-  description = "ARN of the Lambda EventBridge schedule"
-  value       = aws_cloudwatch_event_rule.lambda_schedule.arn
-}
+# NOTE: lambda_schedule_arn removed - Wikipedia Lambda schedule removed
 
 output "cleaning_schedule_arn" {
   description = "ARN of the Glue cleaning job EventBridge schedule"

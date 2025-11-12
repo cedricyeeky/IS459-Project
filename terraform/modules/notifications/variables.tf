@@ -17,11 +17,6 @@ variable "alert_email" {
   type        = string
 }
 
-variable "scraping_schedule" {
-  description = "Cron expression for Lambda scraper schedule"
-  type        = string
-}
-
 variable "cleaning_schedule" {
   description = "Cron expression for Glue cleaning job schedule"
   type        = string
@@ -29,11 +24,6 @@ variable "cleaning_schedule" {
 
 variable "crawler_schedule" {
   description = "Cron expression for Glue crawlers schedule"
-  type        = string
-}
-
-variable "lambda_function_arn" {
-  description = "ARN of the Lambda function"
   type        = string
 }
 
@@ -63,3 +53,12 @@ variable "tags" {
   default     = {}
 }
 
+variable "aws_account_id" {
+  description = "AWS Account ID"
+  type        = string
+}
+
+variable "dlq_bucket_name" {
+  description = "Name of the DLQ S3 bucket"
+  type        = string
+}

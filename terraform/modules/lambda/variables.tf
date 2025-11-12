@@ -37,9 +37,21 @@ variable "dlq_bucket_name" {
   type        = string
 }
 
-variable "wikipedia_urls" {
-  description = "List of Wikipedia URLs to scrape"
-  type        = list(string)
+variable "silver_bucket_name" {
+  description = "Name of the silver data S3 bucket"
+  type        = string
+}
+
+variable "eventbridge_rule_arn" {
+  description = "ARN of the EventBridge rule for scraped data processing"
+  type        = string
+  default     = "*"  # Default to allow all EventBridge rules
+}
+
+variable "ecr_repository_url" {
+  description = "ECR repository URL for scraped processor Lambda container image"
+  type        = string
+  default     = "820242928352.dkr.ecr.us-east-1.amazonaws.com/flight-delays-scraped-processor"
 }
 
 variable "tags" {

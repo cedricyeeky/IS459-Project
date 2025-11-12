@@ -49,6 +49,19 @@ data "aws_iam_policy_document" "lambda_s3" {
     ]
   }
 
+  # Write access to Silver bucket for processed data
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      var.silver_bucket_arn,
+      "${var.silver_bucket_arn}/*"
+    ]
+  }
+
   # Write access to DLQ bucket for error logging
   statement {
     effect = "Allow"
@@ -236,5 +249,61 @@ resource "aws_iam_role_policy_attachment" "glue_logs" {
 resource "aws_iam_role_policy_attachment" "glue_service" {
   role       = aws_iam_role.glue.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+}
+
+# ----------------------------------------------------------------------------
+# EventBridge Role for Glue Triggers
+# ----------------------------------------------------------------------------
+
+# Trust policy for EventBridge service
+data "aws_iam_policy_document" "eventbridge_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "eventbridge" {
+  name               = "${var.resource_prefix}-eventbridge-role"
+  assume_role_policy = data.aws_iam_policy_document.eventbridge_assume_role.json
+
+  tags = merge(
+    var.tags,
+    {
+      Name = "${var.resource_prefix}-eventbridge-role"
+    }
+  )
+}
+
+# EventBridge policy to start Glue jobs
+data "aws_iam_policy_document" "eventbridge_glue" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "glue:StartJobRun"
+    ]
+    resources = [
+      "arn:aws:glue:*:*:job/*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "eventbridge_glue" {
+  name        = "${var.resource_prefix}-eventbridge-glue-policy"
+  description = "Policy for EventBridge to trigger Glue jobs"
+  policy      = data.aws_iam_policy_document.eventbridge_glue.json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "eventbridge_glue" {
+  role       = aws_iam_role.eventbridge.name
+  policy_arn = aws_iam_policy.eventbridge_glue.arn
 }
 

@@ -244,33 +244,48 @@ resource "aws_s3_object" "dlq_folders" {
 }
 
 # ----------------------------------------------------------------------------
+# S3 EventBridge Notifications for Raw Bucket
+# ----------------------------------------------------------------------------
+
+# Enable EventBridge notifications for Raw bucket (for scraped data processing)
+resource "aws_s3_bucket_notification" "raw_eventbridge" {
+  bucket      = aws_s3_bucket.raw.id
+  eventbridge = true
+}
+
+# ----------------------------------------------------------------------------
 # S3 Event Notifications for DLQ Bucket
 # ----------------------------------------------------------------------------
 
-resource "aws_s3_bucket_notification" "dlq_notifications" {
-  bucket = aws_s3_bucket.dlq.id
+# NOTE: S3 → SNS direct notifications replaced with S3 → Lambda → SNS
+# The direct SNS notifications were not working reliably.
+# Now handled by lambda_dlq_notifier module instead.
 
-  topic {
-    topic_arn = var.dlq_sns_topic_arn
-    events    = ["s3:ObjectCreated:*"]
-    
-    filter_prefix = "scraping_errors/"
-  }
+# resource "aws_s3_bucket_notification" "dlq_notifications" {
+#   bucket = aws_s3_bucket.dlq.id
+#
+#   topic {
+#     topic_arn = var.dlq_sns_topic_arn
+#     events    = ["s3:ObjectCreated:*"]
+#     
+#     filter_prefix = "scraping_errors/"
+#   }
+#
+#   topic {
+#     topic_arn = var.dlq_sns_topic_arn
+#     events    = ["s3:ObjectCreated:*"]
+#     
+#     filter_prefix = "cleaning_errors/"
+#   }
+#
+#   topic {
+#     topic_arn = var.dlq_sns_topic_arn
+#     events    = ["s3:ObjectCreated:*"]
+#     
+#     filter_prefix = "feature_eng_errors/"
+#   }
+#
+#   depends_on = [aws_s3_bucket.dlq]
+# }
 
-  topic {
-    topic_arn = var.dlq_sns_topic_arn
-    events    = ["s3:ObjectCreated:*"]
-    
-    filter_prefix = "cleaning_errors/"
-  }
-
-  topic {
-    topic_arn = var.dlq_sns_topic_arn
-    events    = ["s3:ObjectCreated:*"]
-    
-    filter_prefix = "feature_eng_errors/"
-  }
-
-  depends_on = [aws_s3_bucket.dlq]
-}
 

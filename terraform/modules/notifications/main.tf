@@ -28,11 +28,31 @@ resource "aws_sns_topic_policy" "dlq_alerts" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "AllowS3Publish"
         Effect = "Allow"
         Principal = {
           Service = "s3.amazonaws.com"
         }
         Action   = "SNS:Publish"
+        Resource = aws_sns_topic.dlq_alerts.arn
+      },
+      {
+        Sid    = "AllowAccountFullAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${var.aws_account_id}:root"
+        }
+        Action = [
+          "SNS:Publish",
+          "SNS:Subscribe",
+          "SNS:SetTopicAttributes",
+          "SNS:RemovePermission",
+          "SNS:Receive",
+          "SNS:ListSubscriptionsByTopic",
+          "SNS:GetTopicAttributes",
+          "SNS:DeleteTopic",
+          "SNS:AddPermission"
+        ]
         Resource = aws_sns_topic.dlq_alerts.arn
       }
     ]
@@ -47,31 +67,9 @@ resource "aws_sns_topic_subscription" "email" {
 }
 
 # ----------------------------------------------------------------------------
-# EventBridge Scheduler for Lambda Scraper
+# NOTE: EventBridge Scheduler for Lambda Scraper REMOVED
+# Wikipedia scraper Lambda function was not implemented and has been removed
 # ----------------------------------------------------------------------------
-
-resource "aws_cloudwatch_event_rule" "lambda_schedule" {
-  name                = "${var.resource_prefix}-lambda-schedule"
-  description         = "Trigger Lambda scraper weekly on Saturdays at 11 PM UTC"
-  schedule_expression = var.scraping_schedule
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_event_target" "lambda" {
-  rule      = aws_cloudwatch_event_rule.lambda_schedule.name
-  target_id = "LambdaTarget"
-  arn       = var.lambda_function_arn
-}
-
-# Permission for EventBridge to invoke Lambda
-resource "aws_lambda_permission" "allow_eventbridge" {
-  statement_id  = "AllowExecutionFromEventBridge"
-  action        = "lambda:InvokeFunction"
-  function_name = var.lambda_function_arn
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.lambda_schedule.arn
-}
 
 # ----------------------------------------------------------------------------
 # EventBridge Scheduler for Glue Cleaning Job
