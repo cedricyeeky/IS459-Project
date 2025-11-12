@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes all implemented Athena queries that deliver the expected analysis outputs for BQ1 and BQ2, integrating real-time mock API data with historical Gold layer data.
+This document summarizes all implemented Athena queries that deliver the expected analysis outputs for BQ1 and BQ2, integrating real-time API data with historical Gold layer data.
 
 ## BQ1: Airline Operations & Efficiency
 
@@ -151,7 +151,7 @@ This document summarizes all implemented Athena queries that deliver the expecte
 ## Data Integration Strategy
 
 ### Real-Time Data Sources
-1. **`realtime_flights`**: Mock API flight data with current status
+1. **`realtime_flights`**: API flight data with current status
 2. **`realtime_weather`**: Current weather conditions at airports
 
 ### Historical Data Sources (Gold Layer)
