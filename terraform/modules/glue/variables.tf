@@ -78,8 +78,5 @@ variable "aws_account_id" {
   type        = string
 }
 
-variable "scraped_processor_lambda_arn" {
-  description = "ARN of the Lambda function for processing scraped data"
-  type        = string
-}
+# NOTE: scraped_processor_lambda_arn variable removed - now using S3 notifications instead of EventBridge
 

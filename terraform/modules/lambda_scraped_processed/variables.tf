@@ -42,12 +42,6 @@ variable "silver_bucket_name" {
   type        = string
 }
 
-variable "eventbridge_rule_arn" {
-  description = "ARN of the EventBridge rule for scraped data processing"
-  type        = string
-  default     = "*"  # Default to allow all EventBridge rules
-}
-
 variable "ecr_repository_url" {
   description = "ECR repository URL for scraped processor Lambda container image"
   type        = string

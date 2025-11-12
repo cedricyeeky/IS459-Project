@@ -109,8 +109,8 @@ module "s3" {
 # Lambda Module - Web Scraping
 # ============================================================================
 
-module "lambda" {
-  source = "./modules/lambda"
+module "lambda_scraped_processed" {
+  source = "./modules/lambda_scraped_processed"
 
   resource_prefix = local.resource_prefix
   environment     = var.environment
@@ -153,8 +153,7 @@ module "glue" {
   aws_region     = var.aws_region
   aws_account_id = data.aws_caller_identity.current.account_id
 
-  # Lambda function ARN for scraped data processing
-  scraped_processor_lambda_arn = module.lambda.scraped_processor_function_arn
+  # NOTE: scraped_processor_lambda_arn removed - now using S3 notifications instead of EventBridge
 
   # Glue job configuration
   glue_version          = var.glue_version

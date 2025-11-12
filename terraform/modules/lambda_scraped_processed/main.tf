@@ -47,12 +47,35 @@ resource "aws_cloudwatch_log_group" "scraped_processor" {
   tags = var.tags
 }
 
-# Lambda permission to allow EventBridge to invoke
-resource "aws_lambda_permission" "allow_eventbridge_scraped" {
-  statement_id  = "AllowExecutionFromEventBridge"
+# Lambda permission to allow S3 to invoke
+resource "aws_lambda_permission" "allow_s3" {
+  statement_id  = "AllowExecutionFromS3"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.scraped_processor.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = var.eventbridge_rule_arn
+  principal     = "s3.amazonaws.com"
+  source_arn    = "arn:aws:s3:::${var.raw_bucket_name}"
+}
+
+# S3 bucket notification to trigger Lambda on new scraped data
+resource "aws_s3_bucket_notification" "scraped_data_trigger" {
+  bucket = var.raw_bucket_name
+
+  # Trigger on weather data
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.scraped_processor.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "scraped/weather/"
+    filter_suffix       = ".json"
+  }
+
+  # Trigger on flight data
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.scraped_processor.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "scraped/flights/"
+    filter_suffix       = ".json"
+  }
+
+  depends_on = [aws_lambda_permission.allow_s3]
 }
 

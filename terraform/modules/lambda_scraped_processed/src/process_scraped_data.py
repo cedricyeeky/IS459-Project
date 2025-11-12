@@ -21,16 +21,24 @@ DLQ_BUCKET = os.environ['DLQ_BUCKET']
 
 def lambda_handler(event, context):
     """
-    Process S3 EventBridge notification for new scraped data files.
+    Process S3 notification for new scraped data files.
     """
     print(f"Received event: {json.dumps(event)}")
-    
+
     try:
-        # Extract S3 bucket and key from EventBridge event
-        detail = event.get('detail', {})
-        bucket_name = detail.get('bucket', {}).get('name')
-        object_key = detail.get('object', {}).get('key')
-        
+        # Extract S3 bucket and key from S3 event notification
+        # S3 events come in format: event['Records'][0]['s3']['bucket']['name']
+        if 'Records' in event and len(event['Records']) > 0:
+            s3_record = event['Records'][0]['s3']
+            bucket_name = s3_record['bucket']['name']
+            object_key = s3_record['object']['key']
+        else:
+            print("ERROR: Missing Records in S3 event")
+            return {
+                'statusCode': 400,
+                'body': json.dumps('Invalid S3 event structure')
+            }
+
         if not bucket_name or not object_key:
             print("ERROR: Missing bucket or key in event")
             return {

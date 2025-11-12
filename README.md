@@ -2,78 +2,19 @@
 
 A production-ready AWS data pipeline built with Terraform that processes flight delay data through a medallion architecture (Raw → Silver → Gold) with comprehensive error handling via S3 Dead Letter Queue.
 
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         FLIGHT DELAYS PIPELINE                          │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Data Sources   │     │   Lambda Scraper │     │   EventBridge    │
-│                  │     │   (Wikipedia)    │     │   Schedules      │
-│ • Kaggle CSV     │────▶│                  │◀────│                  │
-│ • FAA Data       │     │  Sat 11PM UTC    │     │ • Lambda: Sat    │
-│ • Plane Data     │     └────────┬─────────┘     │ • Glue: Sun 1AM  │
-└──────────────────┘              │               │ • Crawlers: 2AM  │
-                                  ▼               └──────────────────┘
-                         ┌─────────────────┐
-                         │   S3 RAW Bucket │
-                         │  /historical/   │
-                         │  /supplemental/ │
-                         │  /scraped/      │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                    ┌──────────────────────────┐
-                    │  Glue Job 1: Cleaning    │
-                    │  • Schema validation     │
-                    │  • Null handling         │
-                    │  • Deduplication         │
-                    │  • Outlier detection     │
-                    └──────────┬───────────────┘
-                               │
-                ┌──────────────┴──────────────┐
-                ▼                             ▼
-       ┌─────────────────┐          ┌─────────────────┐
-       │ S3 SILVER Bucket│          │   S3 DLQ Bucket │
-       │   (Parquet)     │          │  /cleaning_errors/
-       └────────┬────────┘          │  /scraping_errors/
-                │                   │  /feature_eng_errors/
-                ▼                   └─────────┬───────┘
-   ┌──────────────────────────┐              │
-   │ Glue Job 2: Features     │              ▼
-   │ • Delay rate metrics     │     ┌─────────────────┐
-   │ • Rolling averages       │     │   SNS Alerts    │
-   │ • Holiday impact         │     │  (Email notify) │
-   │ • Event correlation      │     └─────────────────┘
-   └──────────┬───────────────┘
-              │
-              ▼
-     ┌─────────────────┐
-     │ S3 GOLD Bucket  │
-     │   (Parquet)     │
-     │ Analysis-ready  │
-     └────────┬────────┘
-              │
-              ▼
-     ┌─────────────────┐
-     │  Glue Crawlers  │
-     │  (Catalog Data) │
-     └─────────────────┘
-```
-
 ## Features
 
 - **Medallion Architecture**: Raw → Silver → Gold data layers
-- **Automated Data Ingestion**: Lambda-based web scraping for supplemental data
+- **Real-time Data Collection**: ECS-based Mock API + Scraper for continuous data ingestion
+- **Event-Driven Processing**: S3 event notifications trigger Lambda for immediate data processing
 - **Robust ETL**: AWS Glue jobs with comprehensive error handling
 - **Dead Letter Queue**: S3-based DLQ for failed records and error diagnostics
-- **Automated Scheduling**: EventBridge schedules for weekly pipeline execution
+- **Automated Scheduling**: EventBridge schedules for pipeline execution (Scraper: 15min, Glue: weekly)
 - **Data Catalog**: AWS Glue crawlers for automatic schema discovery
 - **Monitoring**: SNS email alerts for pipeline failures
 - **Actionable Gold Outputs**: Gold layer publishes flight-level features plus cascade-risk and traveler reliability scorecards
 - **Infrastructure as Code**: 100% Terraform with modular design
+- **Containerized Deployment**: Docker-based Lambda and ECS services
 
 ## Prerequisites
 
@@ -88,45 +29,68 @@ Before deploying this pipeline, ensure you have:
    ```bash
    terraform --version
    ```
-4. **Python 3.11** (for local Lambda testing)
-5. **Git** (for version control)
+4. **Docker** (for building and pushing images to ECR)
+   ```bash
+   docker --version
+   docker info  # Verify Docker daemon is running
+   ```
+5. **Python 3.11** (for local Lambda testing)
+6. **Git** (for version control)
 
 ## Project Structure
 
 ```
-terraform/
-├── main.tf                 # Root module orchestration
-├── variables.tf            # Input variable definitions
-├── outputs.tf              # Output value definitions
-├── terraform.tfvars        # Variable values (gitignored)
-├── terraform.tfvars.example # Example configuration
-├── modules/
-│   ├── s3/                 # S3 buckets with lifecycle policies
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── iam/                # IAM roles and policies
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── lambda/             # Lambda scraper infrastructure
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── src/
-│   │       ├── .gitkeep    # Placeholder for future implementation
-│   │       └── requirements.txt
-│   ├── glue/               # Glue jobs, crawlers, database
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── scripts/
-│   │       ├── data_cleaning.py
-│   │       └── feature_engineering.py
-│   └── notifications/      # SNS and EventBridge
-│       ├── main.tf
-│       ├── variables.tf
-│       └── outputs.tf
+IS459-Project/
+├── deploy-docker-images.sh    # Automated Docker deployment script
+├── DEPLOYMENT.md              # Detailed deployment guide
+├── README.md                  # This file
+└── terraform/
+    ├── main.tf                # Root module orchestration
+    ├── variables.tf           # Input variable definitions
+    ├── outputs.tf             # Output value definitions
+    ├── terraform.tfvars       # Variable values (gitignored)
+    └── modules/
+        ├── s3/                # S3 buckets with lifecycle policies
+        ├── iam/               # IAM roles and policies
+        ├── lambda_scraped_processed/   # Lambda for JSON → Parquet
+        │   ├── main.tf
+        │   ├── variables.tf
+        │   ├── outputs.tf
+        │   └── src/
+        │       ├── Dockerfile
+        │       ├── process_scraped_data.py
+        │       └── requirements.txt
+        ├── lambda_dlq_notifier/       # Lambda for DLQ → SNS alerts
+        │   ├── main.tf
+        │   ├── variables.tf
+        │   ├── outputs.tf
+        │   └── lambda_function.py
+        ├── glue/              # Glue jobs, crawlers, database
+        │   ├── main.tf
+        │   ├── variables.tf
+        │   ├── outputs.tf
+        │   └── scripts/
+        │       ├── data_cleaning.py
+        │       └── feature_engineering.py
+        ├── notifications/     # SNS and EventBridge schedules
+        ├── athena/           # Athena workgroup and named queries
+        ├── quicksight/       # QuickSight resources (optional)
+        ├── mock_api_ecs/     # ECS Mock API service
+        │   ├── main.tf
+        │   ├── variables.tf
+        │   ├── outputs.tf
+        │   └── src/
+        │       ├── Dockerfile
+        │       ├── app.py
+        │       └── requirements.txt
+        └── scraper_ecs/      # ECS Scraper task (scheduled)
+            ├── main.tf
+            ├── variables.tf
+            ├── outputs.tf
+            └── src/
+                ├── Dockerfile
+                ├── scraper.py
+                └── requirements.txt
 ```
 
 ## Deployment Instructions
@@ -176,11 +140,67 @@ terraform apply tfplan
 
 Type `yes` when prompted to confirm deployment.
 
-### Step 5: Confirm SNS Subscription
+### Step 5: Build and Push Docker Images
+
+After Terraform creates the infrastructure, build and push Docker images for ECS services:
+
+**Option A: Automated (Recommended)**
+
+Use the provided deployment script:
+
+```bash
+# From project root
+./deploy-docker-images.sh
+
+# Or include Lambda image rebuild
+./deploy-docker-images.sh --with-lambda
+```
+
+The script will:
+- ✅ Build Mock API Docker image
+- ✅ Build Scraper Docker image
+- ✅ Build Lambda Scraped Processor (if `--with-lambda` flag used)
+- ✅ Push all images to ECR
+- ✅ Restart ECS services automatically
+
+**Option B: Manual**
+
+```bash
+# Get ECR URLs from Terraform
+cd terraform
+MOCK_API_ECR=$(terraform output -raw mock_api_ecr_repository_url)
+SCRAPER_ECR=$(terraform output -raw scraper_ecr_repository_url)
+
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin $(echo $MOCK_API_ECR | cut -d'/' -f1)
+
+# Build and push Mock API
+cd modules/mock_api_ecs/src
+docker build --platform linux/amd64 -t mock-api:latest .
+docker tag mock-api:latest $MOCK_API_ECR:latest
+docker push $MOCK_API_ECR:latest
+
+# Build and push Scraper
+cd ../../../modules/scraper_ecs/src
+docker build --platform linux/amd64 -t scraper:latest .
+docker tag scraper:latest $SCRAPER_ECR:latest
+docker push $SCRAPER_ECR:latest
+
+# Restart ECS services
+cd ../../../..
+CLUSTER_NAME=$(terraform output -raw ecs_cluster_name)
+MOCK_API_SERVICE=$(terraform output -raw mock_api_service_name)
+aws ecs update-service --cluster $CLUSTER_NAME --service $MOCK_API_SERVICE --force-new-deployment
+```
+
+For detailed Docker deployment instructions, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+### Step 6: Confirm SNS Subscription
 
 After deployment, check your email for an SNS subscription confirmation from AWS. Click the confirmation link to receive DLQ alerts.
 
-### Step 6: Verify Deployment
+### Step 7: Verify Deployment
 
 ```bash
 # View outputs

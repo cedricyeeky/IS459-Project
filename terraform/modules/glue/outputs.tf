@@ -42,8 +42,5 @@ output "gold_crawler_name" {
   value       = aws_glue_crawler.gold.name
 }
 
-output "scraped_data_trigger_rule_arn" {
-  description = "ARN of the EventBridge rule for scraped data processing"
-  value       = aws_cloudwatch_event_rule.scraped_data_trigger.arn
-}
+# NOTE: scraped_data_trigger_rule_arn output removed - now using S3 notifications instead
 

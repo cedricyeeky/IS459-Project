@@ -174,45 +174,10 @@ resource "aws_glue_trigger" "start_feature_engineering" {
 }
 
 # ----------------------------------------------------------------------------
-# EventBridge Rule for S3 Events (Scraped Data)
-# ----------------------------------------------------------------------------
-
-# EventBridge rule to trigger Lambda when new files arrive in scraped/flights/ or scraped/weather/ folders
-resource "aws_cloudwatch_event_rule" "scraped_data_trigger" {
-  name        = "${var.resource_prefix}-scraped-data-trigger"
-  description = "Trigger Lambda when new scraped data files are uploaded to flights or weather folders"
-
-  event_pattern = jsonencode({
-    source      = ["aws.s3"]
-    detail-type = ["Object Created"]
-    detail = {
-      bucket = {
-        name = [var.raw_bucket_name]
-      }
-      object = {
-        key = [{
-          prefix = "scraped/flights/"
-        }, {
-          prefix = "scraped/weather/"
-        }]
-      }
-    }
-  })
-
-  tags = var.tags
-}
-
-# EventBridge target to invoke the Lambda function
-resource "aws_cloudwatch_event_target" "start_scraped_processing" {
-  rule      = aws_cloudwatch_event_rule.scraped_data_trigger.name
-  target_id = "ScrapedDataProcessorLambda"
-  arn       = var.scraped_processor_lambda_arn
-}
-
-
-# ----------------------------------------------------------------------------
 # Glue Crawlers
 # ----------------------------------------------------------------------------
+# NOTE: EventBridge rule for scraped data processing removed.
+# Now using S3 event notifications directly in Lambda module for simpler architecture.
 
 # Crawler for Raw bucket
 resource "aws_glue_crawler" "raw" {
