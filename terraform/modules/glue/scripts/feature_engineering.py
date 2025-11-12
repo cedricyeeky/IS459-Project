@@ -8,6 +8,7 @@ Failed records are written to the DLQ bucket with error metadata.
 
 import sys
 import json
+import traceback
 from datetime import datetime
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
@@ -16,10 +17,11 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql import DataFrame, Window
 from pyspark.sql.functions import (
-    col, to_date, concat_ws, avg, stddev, count, lit, when,
+    col, to_date, concat, concat_ws, avg, stddev, count, lit, when,
     lag, lead, coalesce, sum as spark_sum, datediff, floor,
     percentile_approx, ceil, create_map, max as spark_max,
-    current_timestamp
+    min as spark_min, current_timestamp, from_unixtime, hour,
+    broadcast, substring, upper, lpad
 )
 from pyspark.sql.types import DoubleType, IntegerType, StringType
 import logging
@@ -705,13 +707,25 @@ def create_holiday_impact_features(df, holiday_df=None):
         # If no holiday data provided, try to load from Silver bucket
         if holiday_df is None:
             try:
-                holiday_path = f"s3://{SILVER_BUCKET}/"
-                all_data = spark.read.parquet(holiday_path)
+                # Try reading from scraped/holidays/ first, then fall back to scraped/
+                holiday_paths = [
+                    f"s3://{SILVER_BUCKET}/scraped/holidays/",
+                    f"s3://{SILVER_BUCKET}/scraped/"
+                ]
                 
-                # Filter for holiday data
-                holiday_df = all_data.filter(col("data_source") == "scraped")
+                holiday_df = None
+                for holiday_path in holiday_paths:
+                    try:
+                        logger.info(f"Trying to read holiday data from: {holiday_path}")
+                        holiday_df = spark.read.parquet(holiday_path)
+                        if holiday_df.count() > 0:
+                            logger.info(f"Successfully read holiday data from: {holiday_path}")
+                            break
+                    except Exception as path_error:
+                        logger.debug(f"Could not read from {holiday_path}: {str(path_error)}")
+                        continue
                 
-                if holiday_df.count() == 0:
+                if holiday_df is None or holiday_df.count() == 0:
                     logger.warning("No holiday data found, skipping holiday features")
                     # Add placeholder holiday columns
                     df = df.withColumn("is_holiday", lit(0)) \
@@ -779,33 +793,63 @@ def create_holiday_impact_features(df, holiday_df=None):
 def read_silver_weather_data():
     """
     Read cleaned weather data from Silver bucket.
-    Weather data is identified by having obs_id and valid_time_gmt columns.
+    Weather data is stored in s3://{SILVER_BUCKET}/weather/
     """
     logger.info("Reading weather data from Silver bucket")
     
     try:
-        silver_path = f"s3://{SILVER_BUCKET}/"
-        all_silver = spark.read.parquet(silver_path)
+        weather_path = f"s3://{SILVER_BUCKET}/weather/"
+        logger.info(f"Reading from path: {weather_path}")
         
-        # Filter for weather data: supplemental source with weather identifiers
-        weather_df = all_silver.filter(
-            (col("data_source") == "supplemental") & 
-            (col("obs_id").isNotNull())
-        )
+        weather_df = spark.read.parquet(weather_path)
         
-        weather_count = weather_df.count()
-        logger.info(f"Read {weather_count} weather records from Silver")
+        if "obs_id" not in weather_df.columns:
+            logger.warning("Weather data missing 'obs_id' column, skipping weather processing")
+            return None
+        
+        # Filter to rows with weather identifiers
+        weather_df = weather_df.filter(col("obs_id").isNotNull())
+        
+        supplemental_count = 0
+        scraped_count = 0
+        
+        if "data_source" in weather_df.columns:
+            weather_df = weather_df.filter(col("data_source").isin(["supplemental", "scraped_weather"]))
+            weather_df = weather_df.cache()
+            
+            source_counts = {row["data_source"]: row["count"] for row in weather_df.groupBy("data_source").count().collect()}
+            supplemental_count = source_counts.get("supplemental", 0)
+            scraped_count = source_counts.get("scraped_weather", 0)
+            weather_count = sum(source_counts.values())
+        else:
+            logger.info("Weather data missing 'data_source' column; treating all records as supplemental history")
+            weather_df = weather_df.cache()
+            weather_count = weather_df.count()
+            supplemental_count = weather_count
+            scraped_count = 0
+        
+        logger.info(f"Read {weather_count} total weather records from Silver")
+        logger.info(f"  - Historical (supplemental): {supplemental_count} records")
+        logger.info(f"  - Real-time (scraped_weather): {scraped_count} records")
         
         if weather_count == 0:
             logger.warning("No weather data found in Silver bucket")
+            weather_df.unpersist()
             return None
         
         # Log sample columns to verify structure
         if weather_count > 0:
             logger.info(f"Weather data columns: {weather_df.columns}")
             logger.info("Sample weather record:")
-            weather_df.select("obs_id", "valid_time_gmt", "temp", "precip_hrly", "wspd", "vis").show(1, truncate=False)
+            # Select available columns (some may not exist in all weather data formats)
+            available_cols = [c for c in ["obs_id", "valid_time_gmt", "temp", "precip_hrly", "wspd", "vis"] if c in weather_df.columns]
+            if available_cols:
+                weather_df.select(*available_cols).show(1, truncate=False)
+            else:
+                weather_df.show(1, truncate=False)
         
+        if weather_df.is_cached:
+            weather_df.unpersist()
         return weather_df
         
     except Exception as e:
@@ -938,25 +982,15 @@ def engineer_weather_features(weather_df):
 def read_silver_terrorism_data():
     """
     Read cleaned terrorism data from Silver bucket.
-    Terrorism data is identified by having event_date or similar date columns.
+    Terrorism data is stored in s3://{SILVER_BUCKET}/terrorism/
     """
     logger.info("Reading terrorism data from Silver bucket")
     
     try:
-        silver_path = f"s3://{SILVER_BUCKET}/"
-        all_silver = spark.read.parquet(silver_path)
+        terrorism_path = f"s3://{SILVER_BUCKET}/terrorism/"
+        logger.info(f"Reading from path: {terrorism_path}")
         
-        # Filter for terrorism data: supplemental source
-        # Check for common terrorism data identifiers
-        terrorism_df = all_silver.filter(
-            (col("data_source") == "supplemental") & 
-            (
-                col("event_date").isNotNull() | 
-                col("date").isNotNull() |
-                col("iyear").isNotNull()  # Global Terrorism Database format
-            ) &
-            ~col("obs_id").isNotNull()  # Exclude weather data
-        )
+        terrorism_df = spark.read.parquet(terrorism_path)
         
         terrorism_count = terrorism_df.count()
         logger.info(f"Read {terrorism_count} terrorism records from Silver")
@@ -1168,22 +1202,163 @@ def engineer_terrorism_features(terrorism_df):
 
 def create_weather_correlation_features(df):
     """
-    Generate weather correlation features (placeholder for future weather data).
-    This function is kept for backward compatibility but weather is now processed separately.
+    Join weather data from Silver and create weather correlation features.
+    Joins on Origin airport + flight_date + flight_hour for matching weather observations.
     """
-    logger.info("Creating weather correlation features (placeholder - weather processed separately)")
+    logger.info("Creating weather correlation features by joining Silver weather data")
     
     try:
-        # Placeholder columns - actual weather data will be joined in Athena queries
-        df = df.withColumn("weather_delay_correlation", lit(None).cast(DoubleType())) \
-               .withColumn("temperature_impact", lit(None).cast(DoubleType())) \
-               .withColumn("precipitation_impact", lit(None).cast(DoubleType()))
+        from pyspark.sql.functions import hour as spark_hour, broadcast, floor
         
-        logger.info("Weather correlation features created (placeholders - join in Athena)")
+        # Read weather data from Silver
+        weather_df = read_silver_weather_data()
+        
+        if weather_df is None or weather_df.count() == 0:
+            logger.warning("No weather data available, skipping weather features")
+            # Return with NULL weather columns
+            df = df.withColumn("weather_severity_score", lit(None).cast(IntegerType())) \
+                   .withColumn("temp_category", lit(None).cast(StringType())) \
+                   .withColumn("precip_category", lit(None).cast(StringType())) \
+                   .withColumn("visibility_category", lit(None).cast(StringType())) \
+                   .withColumn("wind_category", lit(None).cast(StringType())) \
+                   .withColumn("weather_delay_likelihood", lit(None).cast(StringType()))
+            return df
+        
+        # Engineer weather features if not already done
+        if "weather_severity_score" not in weather_df.columns:
+            weather_df = engineer_weather_features(weather_df)
+        
+        # Prepare weather data for joining
+        # Convert Unix timestamp to date + hour
+        weather_df = weather_df.withColumn(
+            "weather_date",
+            to_date(from_unixtime(col("valid_time_gmt")))
+        ).withColumn(
+            "weather_hour",
+            spark_hour(from_unixtime(col("valid_time_gmt")))
+        )
+        
+        # Extract airport code (already done in engineer_weather_features, but ensure it exists)
+        if "airport_code" not in weather_df.columns:
+            weather_df = weather_df.withColumn(
+                "airport_code",
+                when(col("obs_id").rlike("^K[A-Z]{3}$"), 
+                     upper(substring(col("obs_id"), 2, 3)))
+                .otherwise(col("obs_id"))
+            )
+        
+        # Aggregate weather by airport + date + hour (multiple observations per hour)
+        # Use MAX for severity (worst conditions), AVG for metrics
+        weather_agg = weather_df.groupBy("airport_code", "weather_date", "weather_hour").agg(
+            spark_max("weather_severity_score").alias("weather_severity_score"),
+            avg("temp").alias("avg_temp"),
+            spark_max("precip_hrly").alias("max_precip"),
+            spark_max("snow_hrly").alias("max_snow"),
+            avg("wspd").alias("avg_wind"),
+            spark_min("vis").alias("min_visibility"),
+            spark_max("weather_impact_category").alias("weather_impact_category")  # 'severe' > 'moderate' > 'mild' > 'normal'
+        )
+        
+        # Ensure flight_date and flight_hour exist in flights dataframe
+        if "flight_date" not in df.columns:
+            df = df.withColumn(
+                "flight_date",
+                to_date(concat_ws("-", col("Year"), 
+                                 lpad(col("Month"), 2, "0"), 
+                                 lpad(col("DayofMonth"), 2, "0")))
+            )
+        
+        if "flight_hour" not in df.columns:
+            df = df.withColumn(
+                "flight_hour",
+                when(col("CRSDepTime").isNotNull(),
+                     floor(col("CRSDepTime").cast(IntegerType()) / lit(100)))
+                .otherwise(lit(None).cast(IntegerType()))
+            )
+        
+        # Join weather with flights (LEFT JOIN to keep all flights)
+        # Use broadcast hint for weather data (smaller table)
+        flights_count = df.count()
+        weather_count = weather_agg.count()
+        logger.info(f"Joining {flights_count} flights with {weather_count} weather observations")
+        
+        df = df.join(
+            broadcast(weather_agg),
+            (df["Origin"] == weather_agg["airport_code"]) &
+            (df["flight_date"] == weather_agg["weather_date"]) &
+            (df["flight_hour"] == weather_agg["weather_hour"]),
+            how="left"
+        ).drop(weather_agg["airport_code"]) \
+         .drop(weather_agg["weather_date"]) \
+         .drop(weather_agg["weather_hour"])
+        
+        # Create categorical weather features from joined data
+        df = df.withColumn(
+            "temp_category",
+            when(col("avg_temp").isNull(), lit(None).cast(StringType()))
+            .when(col("avg_temp") < 32, lit("freezing"))
+            .when(col("avg_temp") < 50, lit("cold"))
+            .when(col("avg_temp") > 95, lit("extreme"))
+            .when(col("avg_temp") > 85, lit("hot"))
+            .otherwise(lit("normal"))
+        ).withColumn(
+            "precip_category",
+            when(col("max_precip").isNull(), lit(None).cast(StringType()))
+            .when(col("max_precip") > 0.5, lit("heavy"))
+            .when(col("max_precip") > 0.1, lit("moderate"))
+            .when(col("max_precip") > 0, lit("light"))
+            .otherwise(lit("none"))
+        ).withColumn(
+            "visibility_category",
+            when(col("min_visibility").isNull(), lit(None).cast(StringType()))
+            .when(col("min_visibility") < 1.0, lit("poor"))
+            .when(col("min_visibility") < 3.0, lit("reduced"))
+            .otherwise(lit("normal"))
+        ).withColumn(
+            "wind_category",
+            when(col("avg_wind").isNull(), lit(None).cast(StringType()))
+            .when(col("avg_wind") > 30, lit("severe"))
+            .when(col("avg_wind") > 20, lit("high"))
+            .when(col("avg_wind") > 10, lit("moderate"))
+            .otherwise(lit("calm"))
+        ).withColumn(
+            "weather_delay_likelihood",
+            when(col("weather_impact_category").isNull(), lit(None).cast(StringType()))
+            .when(col("weather_severity_score") >= 8, lit("very_high"))
+            .when(col("weather_severity_score") >= 5, lit("high"))
+            .when(col("weather_severity_score") >= 3, lit("medium"))
+            .otherwise(lit("low"))
+        )
+        
+        # Drop intermediate columns
+        df = df.drop("avg_temp", "max_precip", "max_snow", "avg_wind", "min_visibility", "weather_impact_category")
+        
+        # Log statistics
+        weather_joined_count = df.filter(col("weather_severity_score").isNotNull()).count()
+        weather_join_rate = 100.0 * weather_joined_count / flights_count if flights_count > 0 else 0
+        logger.info(f"Weather join rate: {weather_join_rate:.1f}% ({weather_joined_count}/{flights_count} flights)")
+        
+        if weather_joined_count > 0:
+            severity_dist = df.filter(col("weather_severity_score").isNotNull()) \
+                              .groupBy("weather_delay_likelihood").count().collect()
+            logger.info("Weather Delay Likelihood Distribution:")
+            for row in severity_dist:
+                logger.info(f"  {row['weather_delay_likelihood']}: {row['count']} flights")
+        
+        logger.info("Weather correlation features created successfully")
         return df
         
     except Exception as e:
-        logger.warning(f"Error creating weather features: {str(e)}")
+        error_msg = f"Error creating weather features: {str(e)}"
+        logger.error(error_msg)
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        # Return with NULL weather columns on error
+        df = df.withColumn("weather_severity_score", lit(None).cast(IntegerType())) \
+               .withColumn("temp_category", lit(None).cast(StringType())) \
+               .withColumn("precip_category", lit(None).cast(StringType())) \
+               .withColumn("visibility_category", lit(None).cast(StringType())) \
+               .withColumn("wind_category", lit(None).cast(StringType())) \
+               .withColumn("weather_delay_likelihood", lit(None).cast(StringType()))
         return df
 
 def create_historical_event_features(df):
@@ -1432,19 +1607,20 @@ def calculate_feature_statistics(df):
 
 def read_silver_data():
     """
-    Read cleaned data from Silver bucket.
+    Read cleaned historical flight data from Silver bucket.
+    Historical data is stored in s3://{SILVER_BUCKET}/historical/
     """
-    logger.info("Reading data from Silver bucket")
+    logger.info("Reading historical flight data from Silver bucket")
     
     try:
-        silver_path = f"s3://{SILVER_BUCKET}/"
+        historical_path = f"s3://{SILVER_BUCKET}/historical/"
+        logger.info(f"Reading from path: {historical_path}")
         
-        df = spark.read.parquet(silver_path)
+        df = spark.read.parquet(historical_path)
         
-        # Filter for flight delay data (not supplemental or scraped)
-        df = df.filter(col("data_source") == "historical")
+        record_count = df.count()
+        logger.info(f"Read {record_count} historical flight records from Silver bucket")
         
-        logger.info(f"Read {df.count()} records from Silver bucket")
         return df
         
     except Exception as e:

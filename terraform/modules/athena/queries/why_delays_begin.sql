@@ -4,6 +4,9 @@
 -- Analyzes root causes: weather correlation, holiday impact, operational factors
 -- This query answers: "WHY do delays occur at certain times/places?"
 
+
+
+
 -- Weather Impact Analysis
 WITH weather_impact AS (
     SELECT
@@ -14,16 +17,15 @@ WITH weather_impact AS (
         wind_category,
         weather_delay_likelihood,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
-        ROUND(APPROX_PERCENTILE(ArrDelay, 0.90), 2) AS p90_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
+        ROUND(APPROX_PERCENTILE(TRY_CAST(arrdelay AS DOUBLE), 0.90), 2) AS p90_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
-        AND weather_severity_score IS NOT NULL
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
         weather_severity_score, temp_category, precip_category, 
         visibility_category, wind_category, weather_delay_likelihood
@@ -32,42 +34,62 @@ WITH weather_impact AS (
 -- Holiday Impact Analysis
 holiday_impact AS (
     SELECT
-        holiday_proximity_category,
+        CASE 
+            WHEN is_holiday = 1 THEN 'holiday'
+            WHEN days_to_holiday BETWEEN 0 AND 3 THEN 'near_holiday'
+            WHEN days_from_holiday BETWEEN 0 AND 3 THEN 'after_holiday'
+            ELSE 'normal'
+        END AS holiday_proximity_category,
         is_weekend,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
-        AND holiday_proximity_category IS NOT NULL
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
-        holiday_proximity_category, is_weekend
+        CASE 
+            WHEN is_holiday = 1 THEN 'holiday'
+            WHEN days_to_holiday BETWEEN 0 AND 3 THEN 'near_holiday'
+            WHEN days_from_holiday BETWEEN 0 AND 3 THEN 'after_holiday'
+            ELSE 'normal'
+        END,
+        is_weekend
 ),
 
 -- Weather × Holiday Interaction
 interaction_analysis AS (
     SELECT
-        holiday_proximity_category,
+        CASE 
+            WHEN is_holiday = 1 THEN 'holiday'
+            WHEN days_to_holiday BETWEEN 0 AND 3 THEN 'near_holiday'
+            WHEN days_from_holiday BETWEEN 0 AND 3 THEN 'after_holiday'
+            ELSE 'normal'
+        END AS holiday_proximity_category,
         weather_delay_likelihood,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
-        AND holiday_proximity_category IS NOT NULL
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
         AND weather_delay_likelihood IS NOT NULL
     GROUP BY
-        holiday_proximity_category, weather_delay_likelihood
+        CASE 
+            WHEN is_holiday = 1 THEN 'holiday'
+            WHEN days_to_holiday BETWEEN 0 AND 3 THEN 'near_holiday'
+            WHEN days_from_holiday BETWEEN 0 AND 3 THEN 'after_holiday'
+            ELSE 'normal'
+        END,
+        weather_delay_likelihood
     HAVING
-        COUNT(*) >= 100
+        COUNT(*) >= 20  -- Lowered threshold
 ),
 
 -- Carrier Performance by Conditions
@@ -76,19 +98,19 @@ carrier_weather_performance AS (
         UniqueCarrier AS carrier,
         weather_delay_likelihood,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
         AND weather_delay_likelihood IN ('high', 'very_high')
     GROUP BY
         UniqueCarrier, weather_delay_likelihood
     HAVING
-        COUNT(*) >= 500
+        COUNT(*) >= 50  -- Lowered threshold
 )
 
 -- Main Result: Weather Severity Correlation
@@ -109,7 +131,7 @@ SELECT
 FROM
     weather_impact
 WHERE
-    total_flights >= 1000  -- Statistical significance
+    total_flights >= 100  -- Lowered threshold for more results
 ORDER BY
     weather_severity_score DESC,
     delay_rate_pct DESC

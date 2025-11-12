@@ -150,6 +150,94 @@ variable "crawler_schedule" {
 }
 
 # ----------------------------------------------------------------------------
+# QuickSight Configuration
+# ----------------------------------------------------------------------------
+
+variable "enable_quicksight" {
+  description = "Toggle to enable Amazon QuickSight provisioning"
+  type        = bool
+  default     = false
+}
+
+variable "quicksight_account_name" {
+  description = "QuickSight account name (required when enabling account subscription)"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_notification_email" {
+  description = "Notification email for QuickSight account subscription and admin user"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_admin_email" {
+  description = "Email for the QuickSight admin/author user"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_admin_user_name" {
+  description = "User name for the QuickSight admin/author user"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_admin_user_role" {
+  description = "Role for the QuickSight admin user (ADMIN, AUTHOR, READER)"
+  type        = string
+  default     = "AUTHOR"
+}
+
+variable "quicksight_identity_type" {
+  description = "Identity type for the QuickSight user (QUICKSIGHT, IAM, IAM_IDENTITY_CENTER)"
+  type        = string
+  default     = "QUICKSIGHT"
+}
+
+variable "quicksight_namespace" {
+  description = "QuickSight namespace to target (default)"
+  type        = string
+  default     = "default"
+}
+
+variable "quicksight_authentication_method" {
+  description = "QuickSight authentication method (IAM_AND_QUICKSIGHT, IAM_ONLY, IAM_IDENTITY_CENTER)"
+  type        = string
+  default     = "IAM_AND_QUICKSIGHT"
+}
+
+variable "quicksight_edition" {
+  description = "QuickSight edition (STANDARD, ENTERPRISE, ENTERPRISE_AND_Q)"
+  type        = string
+  default     = "ENTERPRISE"
+}
+
+variable "quicksight_authors_group_name" {
+  description = "Custom name for the QuickSight authors group"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_readers_group_name" {
+  description = "Custom name for the QuickSight readers group"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_data_source_id" {
+  description = "Custom identifier for the QuickSight Athena data source"
+  type        = string
+  default     = ""
+}
+
+variable "quicksight_data_source_name" {
+  description = "Custom display name for the QuickSight Athena data source"
+  type        = string
+  default     = ""
+}
+
+# ----------------------------------------------------------------------------
 # Network Configuration (Mock API / Scraper ECS)
 # ----------------------------------------------------------------------------
 

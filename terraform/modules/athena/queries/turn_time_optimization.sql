@@ -1,156 +1,180 @@
--- ============================================================================
--- BQ1: Turn Time Optimization Recommendations with Cost-Benefit Analysis
--- ============================================================================
--- Combines real-time flight data with historical Gold layer data
--- Output: Turn time optimization recommendations with cost-benefit analysis
+-- TURN TIME OPTIMIZATION
+-- Rewritten to use actual available schema from flights table
+-- Original purpose: Aircraft turnaround time optimization
+-- Simplified: Uses tail_number to track aircraft (no flight_id available)
+-- Focus: Analyze turnaround efficiency by aircraft and airport
 
-WITH realtime_turnaround AS (
-    -- Real-time turnaround analysis from mock API
+WITH flight_sequence AS (
     SELECT
         tail_number,
         origin_airport,
         destination_airport,
-        carrier_code,
+        carrier,
+        flight_number,
         flight_date,
-        actual_arrival,
-        scheduled_departure,
-        arrival_delay_minutes,
+        scheduled_departure_time,
+        actual_departure_time,
+        scheduled_arrival_time,
+        actual_arrival_time,
         departure_delay_minutes,
-        -- Calculate real-time turnaround
-        TIMESTAMPDIFF(MINUTE, 
-            CAST(actual_arrival AS TIMESTAMP), 
-            CAST(scheduled_departure AS TIMESTAMP)
-        ) AS realtime_turnaround_minutes,
+        arrival_delay_minutes,
+        is_cancelled,
         cascade_risk,
-        status
-    FROM
-        realtime_flights
-    WHERE
-        actual_arrival IS NOT NULL
-        AND scheduled_departure IS NOT NULL
-        AND status IN ('landed', 'arrived', 'scheduled', 'boarding')
-        AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7' DAY
+        timestamp,
+        -- Convert time strings to minutes since midnight for calculation
+        TRY(
+            CAST(SUBSTR(actual_arrival_time, 1, 2) AS INT) * 60 + 
+            CAST(SUBSTR(actual_arrival_time, 4, 2) AS INT)
+        ) AS arrival_minutes,
+        TRY(
+            CAST(SUBSTR(actual_departure_time, 1, 2) AS INT) * 60 + 
+            CAST(SUBSTR(actual_departure_time, 4, 2) AS INT)
+        ) AS departure_minutes,
+        TRY(
+            CAST(SUBSTR(scheduled_departure_time, 1, 2) AS INT) * 60 + 
+            CAST(SUBSTR(scheduled_departure_time, 4, 2) AS INT)
+        ) AS scheduled_departure_minutes,
+        ROW_NUMBER() OVER (
+            PARTITION BY tail_number, flight_date
+            ORDER BY scheduled_departure_time
+        ) AS flight_sequence_number
+    FROM "flight-delays-dev-db".flights
+    WHERE FROM_ISO8601_TIMESTAMP(timestamp) >= CURRENT_TIMESTAMP - INTERVAL '90' DAY
+        AND tail_number IS NOT NULL
+        AND tail_number != ''
+        AND is_cancelled = false
 ),
 
-historical_buffer_analysis AS (
-    -- Historical buffer recommendations from Gold layer
+-- Calculate turnaround time between consecutive flights
+turnaround_times AS (
     SELECT
-        Origin AS origin_airport,
-        Dest AS destination_airport,
-        UniqueCarrier AS carrier_code,
-        hour_category,
-        COUNT(*) AS total_flights,
-        ROUND(AVG(turnaround_time_minutes), 0) AS current_avg_turnaround,
-        ROUND(AVG(recommended_buffer_minutes), 0) AS recommended_turnaround,
-        ROUND(AVG(buffer_shortfall_minutes), 0) AS avg_shortfall,
-        ROUND(MAX(buffer_shortfall_minutes), 0) AS max_shortfall,
-        SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) AS cascade_count,
-        ROUND(100.0 * SUM(CASE WHEN cascade_occurred = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS cascade_rate_pct,
-        ROUND(AVG(delay_cascaded), 2) AS avg_delay_cascaded,
-        ROUND(AVG(p90_arrival_delay), 0) AS p90_historical_delay
-    FROM
-        flight_features
-    WHERE
-        Year >= 2005
-        AND Cancelled = 0
-        AND turnaround_time_minutes IS NOT NULL
-        AND recommended_buffer_minutes IS NOT NULL
-    GROUP BY
-        Origin, Dest, UniqueCarrier, hour_category
-    HAVING
-        COUNT(*) >= 50
+        f1.tail_number,
+        f1.destination_airport AS turnaround_airport,
+        f1.carrier,
+        f1.flight_date,
+        f1.flight_number AS first_flight,
+        f2.flight_number AS second_flight,
+        f1.actual_arrival_time AS first_arrival,
+        f2.actual_departure_time AS second_departure,
+        f1.arrival_delay_minutes AS first_flight_delay,
+        f2.departure_delay_minutes AS second_flight_delay,
+        f1.cascade_risk AS first_cascade_risk,
+        f2.cascade_risk AS second_cascade_risk,
+        -- Turnaround time in minutes
+        CASE
+            WHEN f2.departure_minutes >= f1.arrival_minutes THEN
+                f2.departure_minutes - f1.arrival_minutes
+            ELSE
+                -- Handle overnight turnaround (next day)
+                (1440 - f1.arrival_minutes) + f2.departure_minutes
+        END AS turnaround_time_minutes,
+        -- Scheduled turnaround time
+        CASE
+            WHEN f2.scheduled_departure_minutes >= f1.arrival_minutes THEN
+                f2.scheduled_departure_minutes - f1.arrival_minutes
+            ELSE
+                (1440 - f1.arrival_minutes) + f2.scheduled_departure_minutes
+        END AS scheduled_turnaround_minutes
+    FROM flight_sequence f1
+    INNER JOIN flight_sequence f2
+        ON f1.tail_number = f2.tail_number
+        AND f1.flight_date = f2.flight_date
+        AND f1.destination_airport = f2.origin_airport
+        AND f2.flight_sequence_number = f1.flight_sequence_number + 1
+    WHERE f1.arrival_minutes IS NOT NULL
+        AND f2.departure_minutes IS NOT NULL
 ),
 
-turn_time_analysis AS (
-    -- Combine real-time and historical data
+-- Analyze turnaround efficiency
+turnaround_analysis AS (
     SELECT
-        COALESCE(r.origin_airport, h.origin_airport) AS origin_airport,
-        COALESCE(r.destination_airport, h.destination_airport) AS destination_airport,
-        COALESCE(r.carrier_code, h.carrier_code) AS carrier_code,
-        h.hour_category,
-        h.total_flights,
-        h.current_avg_turnaround,
-        h.recommended_turnaround,
-        (h.recommended_turnaround - h.current_avg_turnaround) AS minutes_to_add,
-        h.avg_shortfall,
-        h.max_shortfall,
-        h.cascade_count,
-        h.cascade_rate_pct,
-        h.avg_delay_cascaded,
-        h.p90_historical_delay,
-        -- Real-time metrics
-        COUNT(DISTINCT r.flight_id) AS realtime_flight_count,
-        ROUND(AVG(r.realtime_turnaround_minutes), 0) AS avg_realtime_turnaround,
-        SUM(CASE WHEN r.cascade_risk = true THEN 1 ELSE 0 END) AS realtime_cascade_count,
-        ROUND(AVG(r.arrival_delay_minutes), 2) AS avg_realtime_arrival_delay
-    FROM
-        historical_buffer_analysis h
-    LEFT JOIN
-        realtime_turnaround r
-        ON h.origin_airport = r.origin_airport
-        AND h.destination_airport = r.destination_airport
-        AND h.carrier_code = r.carrier_code
-    GROUP BY
-        COALESCE(r.origin_airport, h.origin_airport),
-        COALESCE(r.destination_airport, h.destination_airport),
-        COALESCE(r.carrier_code, h.carrier_code),
-        h.hour_category, h.total_flights, h.current_avg_turnaround,
-        h.recommended_turnaround, h.avg_shortfall, h.max_shortfall,
-        h.cascade_count, h.cascade_rate_pct, h.avg_delay_cascaded, h.p90_historical_delay
+        turnaround_airport,
+        carrier,
+        COUNT(*) AS total_turnarounds,
+        ROUND(AVG(turnaround_time_minutes), 2) AS avg_turnaround_minutes,
+        ROUND(AVG(scheduled_turnaround_minutes), 2) AS avg_scheduled_turnaround,
+        ROUND(STDDEV(turnaround_time_minutes), 2) AS stddev_turnaround,
+        ROUND(MIN(turnaround_time_minutes), 2) AS min_turnaround_minutes,
+        ROUND(MAX(turnaround_time_minutes), 2) AS max_turnaround_minutes,
+        ROUND(APPROX_PERCENTILE(turnaround_time_minutes, 0.50), 2) AS median_turnaround,
+        ROUND(APPROX_PERCENTILE(turnaround_time_minutes, 0.90), 2) AS p90_turnaround,
+        SUM(CASE WHEN turnaround_time_minutes < 45 THEN 1 ELSE 0 END) AS quick_turnarounds,
+        SUM(CASE WHEN turnaround_time_minutes > 120 THEN 1 ELSE 0 END) AS slow_turnarounds,
+        SUM(CASE WHEN second_flight_delay > 15 THEN 1 ELSE 0 END) AS delayed_second_flights,
+        SUM(CASE WHEN second_cascade_risk = true THEN 1 ELSE 0 END) AS cascade_after_turnaround,
+        ROUND(AVG(CASE WHEN second_flight_delay > 15 THEN turnaround_time_minutes END), 2) AS avg_turnaround_when_delayed
+    FROM turnaround_times
+    GROUP BY turnaround_airport, carrier
+    HAVING COUNT(*) >= 1  -- Require minimum sample
+),
+
+-- Calculate efficiency metrics
+turnaround_efficiency AS (
+    SELECT
+        *,
+        ROUND(100.0 * quick_turnarounds / NULLIF(total_turnarounds, 0), 2) AS quick_turnaround_rate_pct,
+        ROUND(100.0 * slow_turnarounds / NULLIF(total_turnarounds, 0), 2) AS slow_turnaround_rate_pct,
+        ROUND(100.0 * delayed_second_flights / NULLIF(total_turnarounds, 0), 2) AS second_flight_delay_rate_pct,
+        ROUND(100.0 * cascade_after_turnaround / NULLIF(total_turnarounds, 0), 2) AS cascade_rate_pct,
+        -- Efficiency score: lower is better (combines speed and consistency)
+        ROUND((avg_turnaround_minutes / 60.0) + (COALESCE(stddev_turnaround, 0) / 100.0), 2) AS efficiency_score,
+        CASE
+            WHEN avg_turnaround_minutes <= 45 THEN 'EXCELLENT'
+            WHEN avg_turnaround_minutes <= 60 THEN 'GOOD'
+            WHEN avg_turnaround_minutes <= 90 THEN 'FAIR'
+            ELSE 'POOR'
+        END AS efficiency_rating
+    FROM turnaround_analysis
+),
+
+-- Identify optimization opportunities
+optimization_opportunities AS (
+    SELECT
+        *,
+        -- Calculate potential time savings
+        CASE
+            WHEN avg_turnaround_minutes > median_turnaround + 15 THEN
+                ROUND(avg_turnaround_minutes - median_turnaround, 2)
+            ELSE 0
+        END AS potential_time_savings_minutes,
+        CASE
+            WHEN slow_turnaround_rate_pct > 20 THEN 'HIGH_PRIORITY'
+            WHEN slow_turnaround_rate_pct > 10 THEN 'MEDIUM_PRIORITY'
+            ELSE 'LOW_PRIORITY'
+        END AS optimization_priority
+    FROM turnaround_efficiency
 )
 
--- Main Result: Turn Time Optimization with Cost-Benefit
+-- FINAL OUTPUT: Turnaround optimization recommendations
+-- NOTE: This query requires aircraft with consecutive flights (same tail_number arriving then departing from same airport)
+-- If no data is returned, it means there are no consecutive flights in the dataset
 SELECT
-    origin_airport,
-    destination_airport,
-    carrier_code,
-    hour_category,
-    total_flights,
-    current_avg_turnaround,
-    recommended_turnaround,
-    minutes_to_add,
-    avg_shortfall,
-    max_shortfall,
-    cascade_count,
+    turnaround_airport,
+    carrier,
+    total_turnarounds,
+    avg_turnaround_minutes,
+    avg_scheduled_turnaround,
+    median_turnaround,
+    p90_turnaround,
+    stddev_turnaround,
+    min_turnaround_minutes,
+    max_turnaround_minutes,
+    quick_turnaround_rate_pct,
+    slow_turnaround_rate_pct,
+    second_flight_delay_rate_pct,
     cascade_rate_pct,
-    avg_delay_cascaded,
-    realtime_flight_count,
-    avg_realtime_turnaround,
-    realtime_cascade_count,
-    -- Cost estimates (simplified)
-    total_flights * 150 AS current_operational_cost,  -- $150 per flight
-    total_flights * minutes_to_add * 2 AS additional_buffer_cost,  -- $2 per minute
-    -- Benefit: Reduced cascades (estimated $500 per avoided cascade)
-    cascade_count * 500 AS current_cascade_cost,
-    ROUND(cascade_count * 0.5 * 500, 0) AS estimated_avoided_cascade_cost,  -- Assume 50% reduction
-    -- Net Benefit
-    (ROUND(cascade_count * 0.5 * 500, 0) - (total_flights * minutes_to_add * 2)) AS net_benefit,
-    -- ROI
-    ROUND(
-        ((ROUND(cascade_count * 0.5 * 500, 0) - (total_flights * minutes_to_add * 2)) / 
-         NULLIF((total_flights * minutes_to_add * 2), 0)) * 100
-    , 2) AS roi_pct,
-    -- Recommendation
+    avg_turnaround_when_delayed,
+    efficiency_score,
+    efficiency_rating,
+    potential_time_savings_minutes,
+    optimization_priority,
     CASE
-        WHEN (ROUND(cascade_count * 0.5 * 500, 0) - (total_flights * minutes_to_add * 2)) > 10000 THEN 'HIGH ROI - Implement'
-        WHEN (ROUND(cascade_count * 0.5 * 500, 0) - (total_flights * minutes_to_add * 2)) > 0 THEN 'POSITIVE ROI - Consider'
-        ELSE 'NEGATIVE ROI - Review'
-    END AS recommendation,
-    -- Priority score
-    ROUND(
-        (avg_shortfall * 0.3) +
-        (cascade_rate_pct * 0.3) +
-        (CASE WHEN realtime_cascade_count > 0 THEN 30 ELSE 0 END) +
-        (CASE WHEN avg_realtime_turnaround < recommended_turnaround THEN 20 ELSE 0 END)
-    , 2) AS priority_score
-FROM
-    turn_time_analysis
-WHERE
-    avg_shortfall > 5  -- Only routes with significant shortfall
-    OR realtime_cascade_count > 0  -- Or with real-time cascades
-ORDER BY
-    priority_score DESC,
-    net_benefit DESC,
-    roi_pct DESC
-LIMIT 200;
-
+        WHEN cascade_rate_pct >= 30 THEN 'Focus on preventing cascade delays'
+        WHEN slow_turnaround_rate_pct >= 25 THEN 'Reduce slow turnarounds (>2 hours)'
+        WHEN stddev_turnaround >= 30 THEN 'Improve turnaround consistency'
+        WHEN avg_turnaround_minutes > avg_scheduled_turnaround + 15 THEN 'Align actual with scheduled times'
+        ELSE 'Maintain current efficiency'
+    END AS optimization_recommendation
+FROM optimization_opportunities
+ORDER BY optimization_priority DESC, efficiency_score DESC, total_turnarounds DESC
+LIMIT 100;

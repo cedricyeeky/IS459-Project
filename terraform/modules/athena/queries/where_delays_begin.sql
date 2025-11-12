@@ -4,6 +4,9 @@
 -- Analyzes geographic hotspots: worst airports, routes, hub performance
 -- This query answers: "WHERE are delays most concentrated?"
 
+
+
+
 -- Airport Performance Rankings
 WITH airport_rankings AS (
     SELECT
@@ -11,21 +14,21 @@ WITH airport_rankings AS (
         airport_type,
         origin_region AS region,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
-        ROUND(APPROX_PERCENTILE(ArrDelay, 0.90), 2) AS p90_delay_minutes,
-        ROUND(AVG(buffer_shortfall_minutes), 2) AS avg_buffer_shortfall,
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
+        ROUND(APPROX_PERCENTILE(TRY_CAST(arrdelay AS DOUBLE), 0.90), 2) AS p90_delay_minutes,
+        ROUND(AVG(TRY_CAST(buffer_shortfall_minutes AS DOUBLE)), 2) AS avg_buffer_shortfall,
         SUM(CASE WHEN buffer_adequacy_category = 'insufficient' THEN 1 ELSE 0 END) AS insufficient_buffer_count
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
         Origin, airport_type, origin_region
     HAVING
-        COUNT(*) >= 1000  -- Minimum flights for reliable statistics
+        COUNT(*) >= 100  -- Lowered threshold for more results
 ),
 
 -- Route Hotspots (Origin-Destination pairs)
@@ -35,19 +38,19 @@ route_hotspots AS (
         Dest AS dest_airport,
         route_type,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
-        ROUND(AVG(buffer_shortfall_minutes), 2) AS avg_buffer_shortfall
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
+        ROUND(AVG(TRY_CAST(buffer_shortfall_minutes AS DOUBLE)), 2) AS avg_buffer_shortfall
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
     GROUP BY
         Origin, Dest, route_type
     HAVING
-        COUNT(*) >= 100  -- Minimum flights per route
+        COUNT(*) >= 20  -- Lowered threshold for more routes
 ),
 
 -- Hub Performance Comparison
@@ -56,16 +59,16 @@ hub_comparison AS (
         Origin AS hub_airport,
         airport_type,
         COUNT(*) AS total_flights,
-        SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) AS delayed_flights,
-        ROUND(100.0 * SUM(CASE WHEN ArrDelay > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
-        ROUND(AVG(ArrDelay), 2) AS avg_delay_minutes,
+        SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) AS delayed_flights,
+        ROUND(100.0 * SUM(CASE WHEN TRY_CAST(arrdelay AS DOUBLE) > 15 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS delay_rate_pct,
+        ROUND(AVG(TRY_CAST(arrdelay AS DOUBLE)), 2) AS avg_delay_minutes,
         COUNT(DISTINCT Dest) AS destinations_served,
         COUNT(DISTINCT UniqueCarrier) AS carriers_operating
     FROM
-        flight_features
+        "flight-delays-dev-db".flight_features
     WHERE
-        Year >= 2005
-        AND Cancelled = 0
+        CAST(year AS INT) >= 1987  -- Use all available data
+        AND cancelled = 0
         AND airport_type IN ('major_hub', 'international_gateway')
     GROUP BY
         Origin, airport_type
@@ -88,7 +91,7 @@ SELECT
 FROM
     airport_rankings
 WHERE
-    delay_rate_pct > 25  -- Focus on problematic airports
+    delay_rate_pct > 15  -- Lowered threshold to include more airports
 ORDER BY
     delay_rate_pct DESC,
     total_flights DESC
